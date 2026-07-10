@@ -6,11 +6,11 @@
 #include "KernelUtils.cuh"
 
 namespace cuSGA {
-    __host__ PackedDNASequence* PackedDNASequence::createFromFile(const std::string& fileName) {
+    __host__ PackedDNASequence* PackedDNASequence::createFromFile(const ::std::string& fileName) {
         // Open sequence file
-        std::ifstream file{fileName};
+        ::std::ifstream file{fileName};
         if (!file.is_open()) {
-            throw std::runtime_error{std::format("Unable to open file: {}", fileName)};
+            throw ::std::runtime_error{::std::format("Unable to open file: {}", fileName)};
         }
 
         // Read sequence from file
@@ -22,12 +22,12 @@ namespace cuSGA {
         return sequence;
     }
 
-    __host__ PackedDNASequence* PackedDNASequence::createFromFile(const std::string& fileName, std::ifstream& file, std::optional<::size_t> numBases, std::optional<const ::uint64_t*> bases) {
+    __host__ PackedDNASequence* PackedDNASequence::createFromFile(const ::std::string& fileName, ::std::ifstream& file, ::std::optional<::size_t> numBases, ::std::optional<const ::uint64_t*> bases) {
         // Read number of bases from file if missing
         if (!numBases.has_value()) {
             ::size_t numBasesValue{0};
             if (!(file >> numBasesValue)) {
-                throw std::runtime_error{std::format("An error occurred while reading values from file: {}", fileName)};
+                throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", fileName)};
             }
 
             // Assign value
@@ -46,7 +46,7 @@ namespace cuSGA {
                 // Read character from file
                 char c{'\0'};
                 if (!(file >> c)) {
-                    throw std::runtime_error{std::format("An error occurred while reading values from file: {}", fileName)};
+                    throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", fileName)};
                 }
 
                 // Convert character to DNA base

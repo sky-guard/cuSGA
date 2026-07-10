@@ -6,11 +6,11 @@
 #include "KernelUtils.cuh"
 
 namespace cuSGA {
-    __host__ PangenomeGraph* PangenomeGraph::createFromFile(const std::string& fileName) {
+    __host__ PangenomeGraph* PangenomeGraph::createFromFile(const ::std::string& fileName) {
         // Open pangenome graph file
-        std::ifstream file{fileName};
+        ::std::ifstream file{fileName};
         if (!file.is_open()) {
-            throw std::runtime_error{std::format("Unable to open file: {}", fileName)};
+            throw ::std::runtime_error{::std::format("Unable to open file: {}", fileName)};
         }
 
         // Read pangenome graph from file
@@ -22,12 +22,12 @@ namespace cuSGA {
         return pangenomeGraph;
     }
 
-    __host__ PangenomeGraph* PangenomeGraph::createFromFile(const std::string& fileName, std::ifstream& file, std::optional<::size_t> numNodes, std::optional<::size_t> numEdges, std::optional<PackedDNASequence*> baseValues, std::optional<const ::size_t*> columnValues, std::optional<const ::size_t*> rowOffsets) {
+    __host__ PangenomeGraph* PangenomeGraph::createFromFile(const ::std::string& fileName, ::std::ifstream& file, ::std::optional<::size_t> numNodes, ::std::optional<::size_t> numEdges, ::std::optional<PackedDNASequence*> baseValues, ::std::optional<const ::size_t*> columnValues, ::std::optional<const ::size_t*> rowOffsets) {
         // Read number of nodes from file if missing
         if (!numNodes.has_value()) {
             ::size_t numNodesValue{0};
             if (!(file >> numNodesValue)) {
-                throw std::runtime_error{std::format("An error occurred while reading values from file: {}", fileName)};
+                throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", fileName)};
             }
 
             // Assign value
@@ -38,7 +38,7 @@ namespace cuSGA {
         if (!numEdges.has_value()) {
             ::size_t numEdgesValue{0};
             if (!(file >> numEdgesValue)) {
-                throw std::runtime_error{std::format("An error occurred while reading values from file: {}", fileName)};
+                throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", fileName)};
             }
 
             // Assign value
@@ -60,7 +60,7 @@ namespace cuSGA {
             // Read the row offsets from file
             for (::size_t i{0}; i <= numNodesValue; ++i) {
                 if (!(file >> rowOffsetsValue[i])) {
-                    throw std::runtime_error{std::format("An error occurred while reading CSR row offsets from file: {}", fileName)};
+                    throw ::std::runtime_error{::std::format("An error occurred while reading CSR row offsets from file: {}", fileName)};
                 }
             }
 
@@ -77,7 +77,7 @@ namespace cuSGA {
             // Read the column values from file
             for (::size_t i{0}; i < numEdgesValue; ++i) {
                 if (!(file >> columnValuesValue[i])) {
-                    throw std::runtime_error{std::format("An error occurred while reading CSR column values from file: {}", fileName)};
+                    throw ::std::runtime_error{::std::format("An error occurred while reading CSR column values from file: {}", fileName)};
                 }
             }
 

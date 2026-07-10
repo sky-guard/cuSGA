@@ -9,10 +9,10 @@ namespace cuSGA::KernelUtils {
     inline constexpr ::uint8_t MAX_WARPS_PER_BLOCK{32};
 
     // cudaGetLastError() wrapper
-    inline void cudaCheckLastError(const std::source_location location = std::source_location::current()) {
+    inline void cudaCheckLastError(const ::std::source_location location = ::std::source_location::current()) {
         // Get last CUDA error and throw exception if error occurred
         if (const auto cudaError{::cudaGetLastError()}; cudaError != ::cudaSuccess) {
-            throw std::runtime_error{std::format("CUDA ERROR [{} -> {}:{}]: {}", location.file_name(), location.function_name(), location.line(), ::cudaGetErrorString(cudaError))};
+            throw ::std::runtime_error{::std::format("CUDA ERROR [{} -> {}:{}]: {}", location.file_name(), location.function_name(), location.line(), ::cudaGetErrorString(cudaError))};
         }
     }
 
@@ -66,7 +66,7 @@ namespace cuSGA::KernelUtils {
         const auto gridSize{(numElements + blockSize - 1) / blockSize};
 
         // Launch kernel
-        Kernel<<<gridSize, blockSize, dynamicSMemSize>>>(std::forward<Args>(args)...);
+        Kernel<<<gridSize, blockSize, dynamicSMemSize>>>(::std::forward<Args>(args)...);
         cudaCheckLastError();
 
         // Synchronize with device if necessary

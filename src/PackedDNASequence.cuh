@@ -15,9 +15,9 @@ namespace cuSGA {
         static constexpr ::uint64_t DNA_BASE_BITMASK{0x03};
 
         // Create packed sequence from file
-        __host__ static PackedDNASequence* createFromFile(const std::string& fileName);
+        __host__ static PackedDNASequence* createFromFile(const ::std::string& fileName);
         // Create packed sequence from opened file
-        __host__ static PackedDNASequence* createFromFile(const std::string& fileName, std::ifstream& file, std::optional<::size_t> numBases = std::nullopt, std::optional<const ::uint64_t*> bases = std::nullopt);
+        __host__ static PackedDNASequence* createFromFile(const ::std::string& fileName, ::std::ifstream& file, ::std::optional<::size_t> numBases = ::std::nullopt, ::std::optional<const ::uint64_t*> bases = ::std::nullopt);
 
         // Move packed sequence to device
         __host__ PackedDNASequence* copyToDevice();

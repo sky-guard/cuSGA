@@ -9,9 +9,9 @@ namespace cuSGA {
     class PangenomeGraph {
     public:
         // Create pangenome graph from file
-        __host__ static PangenomeGraph* createFromFile(const std::string& fileName);
+        __host__ static PangenomeGraph* createFromFile(const ::std::string& fileName);
         // Create pangenome graph from opened file
-        __host__ static PangenomeGraph* createFromFile(const std::string& fileName, std::ifstream& file, std::optional<::size_t> numNodes = std::nullopt, std::optional<::size_t> numEdges = std::nullopt, std::optional<PackedDNASequence*> baseValues = std::nullopt, std::optional<const ::size_t*> columnValues = std::nullopt, std::optional<const ::size_t*> rowOffsets = std::nullopt);
+        __host__ static PangenomeGraph* createFromFile(const ::std::string& fileName, ::std::ifstream& file, ::std::optional<::size_t> numNodes = ::std::nullopt, ::std::optional<::size_t> numEdges = ::std::nullopt, ::std::optional<PackedDNASequence*> baseValues = ::std::nullopt, ::std::optional<const ::size_t*> columnValues = ::std::nullopt, ::std::optional<const ::size_t*> rowOffsets = ::std::nullopt);
 
         // Move pangenome graph to device
         __host__ PangenomeGraph* copyToDevice();

@@ -8,7 +8,7 @@ namespace cuSGA {
         // Map DNA base to character
         auto baseValue{static_cast<::uint8_t>(base)};
         if (baseValue > NUM_BASES - 1) {
-            throw std::runtime_error{std::format("Unable to convert following DNA base to character: {}", baseValue)};
+            throw ::std::runtime_error{::std::format("Unable to convert following DNA base to character: {}", baseValue)};
         }
         return DNA_BASE_TO_CHAR_MAP[baseValue];
     }
@@ -20,7 +20,7 @@ namespace cuSGA {
             case 'C': return DNABase::C;
             case 'G': return DNABase::G;
             case 'T': return DNABase::T;
-            default: throw std::runtime_error{std::format("Unable to convert following character to DNA base: {}", c)};
+            default: throw ::std::runtime_error{::std::format("Unable to convert following character to DNA base: {}", c)};
         }
 
     }

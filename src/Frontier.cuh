@@ -44,15 +44,15 @@ namespace cuSGA {
     private:
         // Frontier implementation
         ::uint64_t currentSize{0};
-        cuda::atomic<::uint64_t, cuda::thread_scope_device> alternateSize{0};
+        ::cuda::atomic<::uint64_t, ::cuda::thread_scope_device> alternateSize{0};
         DoubleBuffer<::uint64_t>* doubleBuffer{nullptr};
-        cuda::atomic<bool, cuda::thread_scope_device>* isInQueue{nullptr};
+        ::cuda::atomic<bool, ::cuda::thread_scope_device>* isInQueue{nullptr};
         Frontier* d_instance{nullptr};
 
         // Default constructor
         Frontier() = default;
         // Frontier constructor
-        __host__ __device__ Frontier(::uint64_t currentSize, ::uint64_t alternateSize, DoubleBuffer<::uint64_t>* doubleBuffer, cuda::atomic<bool, cuda::thread_scope_device>* isInQueue, Frontier* d_instance = nullptr);
+        __host__ __device__ Frontier(::uint64_t currentSize, ::uint64_t alternateSize, DoubleBuffer<::uint64_t>* doubleBuffer, ::cuda::atomic<bool, ::cuda::thread_scope_device>* isInQueue, Frontier* d_instance = nullptr);
     };
 } // cuSGA
 
