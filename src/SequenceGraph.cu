@@ -17,7 +17,7 @@ __global__ void printCosts(const cuSGA::SequenceGraph* const sequenceGraph, cons
         ::printf("[Layer %llu] Node %u: %llu.\n",
                  static_cast<unsigned long long>(layerIdx),
                  static_cast<unsigned int>(nodeIdx),
-                 static_cast<unsigned long long>(costs[nodeIdx].load(cuda::std::memory_order_relaxed)));
+                 static_cast<unsigned long long>(costs[nodeIdx].load(cuda::memory_order_relaxed)));
     }
 }
 
@@ -49,7 +49,7 @@ namespace cuSGA {
 
         // Create costs double buffer instance
         const auto numNodes{pangenomeGraph->getNumNodes()};
-        const auto costsDoubleBuffer{DoubleBuffer<::cuda::atomic<::uint64_t, cuda::std::thread_scope_device>>::create(numNodes)};
+        const auto costsDoubleBuffer{DoubleBuffer<::cuda::atomic<::uint64_t, cuda::thread_scope_device>>::create(numNodes)};
 
         // Create sequence graph instance
         const auto sequenceGraph{new SequenceGraph{sequence, pangenomeGraph, characterGraphs, costsDoubleBuffer}};
@@ -75,18 +75,16 @@ namespace cuSGA {
 
         // Allocate device pangenome graph instance
         SequenceGraph* d_sequenceGraph{nullptr};
-        ::cudaMalloc(&d_sequenceGraph, sizeof(SequenceGraph));
-        KernelUtils::checkLastCudaError();
+        KernelUtils::cudaMalloc(&d_sequenceGraph, sizeof(SequenceGraph));
 
         // Create temporary host instance holding the device pointers
-        const SequenceGraph deviceSequenceGraph{d_sequence, d_pangenomeGraph, d_characterGraphs, d_costsDoubleBuffer, score.load(cuda::std::memory_order_relaxed), d_instance};
+        const SequenceGraph deviceSequenceGraph{d_sequence, d_pangenomeGraph, d_characterGraphs, d_costsDoubleBuffer, score.load(cuda::memory_order_relaxed), d_instance};
 
         // Update host instance data
         this->d_instance = d_sequenceGraph;
 
         // Copy instance data from host to device
-        ::cudaMemcpy(d_sequenceGraph, &deviceSequenceGraph, sizeof(SequenceGraph), ::cudaMemcpyHostToDevice);
-        KernelUtils::checkLastCudaError();
+        KernelUtils::cudaMemcpy(d_sequenceGraph, &deviceSequenceGraph, sizeof(SequenceGraph), ::cudaMemcpyHostToDevice);
 
         return d_sequenceGraph;
     }
@@ -95,8 +93,7 @@ namespace cuSGA {
         // Free device memory if device instance is present
         if (d_instance) {
             // Free device sequence graph instance
-            ::cudaFree(d_instance);
-            KernelUtils::checkLastCudaError();
+            KernelUtils::cudaFree(d_instance);
         }
 
         // Free host memory
@@ -129,25 +126,24 @@ namespace cuSGA {
         return characterGraphs[static_cast<::uint8_t>(base)];
     }
 
-    __host__ __device__ DoubleBuffer<cuda::atomic<::uint64_t, cuda::std::thread_scope_device>>* SequenceGraph::getCostsDoubleBuffer() const {
+    __host__ __device__ DoubleBuffer<cuda::atomic<::uint64_t, cuda::thread_scope_device>>* SequenceGraph::getCostsDoubleBuffer() const {
         return costsDoubleBuffer;
     }
 
     __host__ __device__ ::uint64_t SequenceGraph::getScore() const {
-        return score.load(cuda::std::memory_order_relaxed);
+        return score.load(cuda::memory_order_relaxed);
     }
 
     __host__ ::uint64_t SequenceGraph::getScoreSync() {
         // Copy back score from device
         if (d_instance) {
-            ::cudaMemcpy(&this->score, &d_instance->score, sizeof(score),::cudaMemcpyDeviceToHost);
-            KernelUtils::checkLastCudaError();
+            KernelUtils::cudaMemcpy(&this->score, &d_instance->score, sizeof(score),::cudaMemcpyDeviceToHost);
         }
 
-        return score.load(cuda::std::memory_order_relaxed);
+        return score.load(cuda::memory_order_relaxed);
     }
 
-    __host__ __device__ cuda::atomic<::uint64_t, cuda::std::thread_scope_device>& SequenceGraph::getAtomicScore() {
+    __host__ __device__ cuda::atomic<::uint64_t, cuda::thread_scope_device>& SequenceGraph::getAtomicScore() {
         return score;
     }
 
@@ -172,7 +168,6 @@ namespace cuSGA {
 
         // Perform initialization step
         initialize(false);
-        KernelUtils::checkLastCudaError();
 
         // Swap costs double buffer for the next layer
         costsDoubleBuffer->swapSync();
@@ -181,11 +176,9 @@ namespace cuSGA {
         for (::size_t layerIdx{1}; layerIdx < sequence->getNumBases(); ++layerIdx) {
             // Perform deletions for the given layer
             deletions(layerIdx,false);
-            KernelUtils::checkLastCudaError();
 
             // Perform substitutions for the given layer
             substitutions(layerIdx, false);
-            KernelUtils::checkLastCudaError();
 
             // Skip insertions and propagations for the last layer
             if (layerIdx < sequence->getNumBases() - 1) {
@@ -194,12 +187,10 @@ namespace cuSGA {
 
                 // Perform insertions for the given layer
                 insertions(frontier, false);
-                KernelUtils::checkLastCudaError();
 
                 // Perform propagations for the given layer
                 while (!frontier->isEmptySync()) {
                     propagations(layerIdx, frontier, false);
-                    KernelUtils::checkLastCudaError();
                     frontier->swapToQueueSync();
                 }
 
@@ -219,8 +210,7 @@ namespace cuSGA {
         frontier->free();
 
         // Compute minimum score
-        minScore();
-        KernelUtils::checkLastCudaError();
+        minScore(true);
 
         // Copy back score from device
         const auto score{getScoreSync()};
@@ -230,35 +220,35 @@ namespace cuSGA {
 
     __host__ void SequenceGraph::initialize(const bool sync) {
         // Launch initialize kernel
-        KernelUtils::launchKernel<SequenceGraphKernels::initialize>(SequenceGraphKernels::INITIALIZE_DYNAMIC_SMEM_SIZE, SequenceGraphKernels::INITIALIZE_DYNAMIC_SMEM_SIZE, pangenomeGraph->getNumNodes(), sync, d_instance);
+        KernelUtils::cudaLaunchKernel<SequenceGraphKernels::initialize>(SequenceGraphKernels::INITIALIZE_DYNAMIC_SMEM_SIZE, SequenceGraphKernels::INITIALIZE_DYNAMIC_SMEM_SIZE, pangenomeGraph->getNumNodes(), sync, d_instance);
     }
 
     __host__ void SequenceGraph::substitutions(const ::size_t layerIdx, const bool sync) const {
         // Launch substitutions kernel
-        KernelUtils::launchKernel<SequenceGraphKernels::substitutions>(SequenceGraphKernels::SUBSTITUTIONS_DYNAMIC_SMEM_SIZE, SequenceGraphKernels::SUBSTITUTIONS_MAX_BLOCK_SIZE, pangenomeGraph->getNumNodes(), sync, d_instance, layerIdx);
+        KernelUtils::cudaLaunchKernel<SequenceGraphKernels::substitutions>(SequenceGraphKernels::SUBSTITUTIONS_DYNAMIC_SMEM_SIZE, SequenceGraphKernels::SUBSTITUTIONS_MAX_BLOCK_SIZE, pangenomeGraph->getNumNodes(), sync, d_instance, layerIdx);
     }
 
     __host__ void SequenceGraph::deletions(const ::size_t layerIdx, const bool sync) const {
         // Launch deletions kernel
-        KernelUtils::launchKernel<SequenceGraphKernels::deletions>(SequenceGraphKernels::DELETIONS_DYNAMIC_SMEM_SIZE, SequenceGraphKernels::DELETIONS_MAX_BLOCK_SIZE, pangenomeGraph->getNumNodes(), sync, d_instance, layerIdx);
+        KernelUtils::cudaLaunchKernel<SequenceGraphKernels::deletions>(SequenceGraphKernels::DELETIONS_DYNAMIC_SMEM_SIZE, SequenceGraphKernels::DELETIONS_MAX_BLOCK_SIZE, pangenomeGraph->getNumNodes(), sync, d_instance, layerIdx);
     }
 
     __host__ void SequenceGraph::insertions(const Frontier* const frontier, const bool sync) const {
         // Launch insertions kernel
-        KernelUtils::launchKernel<SequenceGraphKernels::insertions>(SequenceGraphKernels::INSERTIONS_DYNAMIC_SMEM_SIZE, SequenceGraphKernels::INSERTIONS_MAX_BLOCK_SIZE, pangenomeGraph->getNumNodes(), sync, d_instance, frontier->getDeviceInstance());
+        KernelUtils::cudaLaunchKernel<SequenceGraphKernels::insertions>(SequenceGraphKernels::INSERTIONS_DYNAMIC_SMEM_SIZE, SequenceGraphKernels::INSERTIONS_MAX_BLOCK_SIZE, pangenomeGraph->getNumNodes(), sync, d_instance, frontier->getDeviceInstance());
     }
 
     __host__ void SequenceGraph::propagations(const ::size_t layerIdx, const Frontier* const frontier, const bool sync) const {
         // Launch propagations kernel
-        KernelUtils::launchKernel<SequenceGraphKernels::propagations>(SequenceGraphKernels::PROPAGATIONS_DYNAMIC_SMEM_SIZE, SequenceGraphKernels::PROPAGATIONS_MAX_BLOCK_SIZE, frontier->getSize(), sync, d_instance, frontier->getDeviceInstance(), layerIdx);
+        KernelUtils::cudaLaunchKernel<SequenceGraphKernels::propagations>(SequenceGraphKernels::PROPAGATIONS_DYNAMIC_SMEM_SIZE, SequenceGraphKernels::PROPAGATIONS_MAX_BLOCK_SIZE, frontier->getSize(), sync, d_instance, frontier->getDeviceInstance(), layerIdx);
     }
 
     __host__ void SequenceGraph::minScore(const bool sync) const {
         // Launch min score kernel
-        KernelUtils::launchKernel<SequenceGraphKernels::minScore>(SequenceGraphKernels::MIN_SCORE_DYNAMIC_SMEM_SIZE, SequenceGraphKernels::MIN_SCORE_MAX_BLOCK_SIZE, pangenomeGraph->getNumNodes(), sync, d_instance);
+        KernelUtils::cudaLaunchKernel<SequenceGraphKernels::minScore>(SequenceGraphKernels::MIN_SCORE_DYNAMIC_SMEM_SIZE, SequenceGraphKernels::MIN_SCORE_MAX_BLOCK_SIZE, pangenomeGraph->getNumNodes(), sync, d_instance);
     }
 
-    __host__ __device__ SequenceGraph::SequenceGraph(PackedDNASequence* const sequence, PangenomeGraph* const pangenomeGraph, PangenomeGraph* const (& characterGraphs)[NUM_BASES], DoubleBuffer<cuda::atomic<::uint64_t, cuda::std::thread_scope_device>>* const costsDoubleBuffer, const ::uint64_t score, SequenceGraph* const d_instance) : sequence(sequence), pangenomeGraph(pangenomeGraph), costsDoubleBuffer(costsDoubleBuffer), score({score}), d_instance(d_instance) {
+    __host__ __device__ SequenceGraph::SequenceGraph(PackedDNASequence* const sequence, PangenomeGraph* const pangenomeGraph, PangenomeGraph* const (& characterGraphs)[NUM_BASES], DoubleBuffer<cuda::atomic<::uint64_t, cuda::thread_scope_device>>* const costsDoubleBuffer, const ::uint64_t score, SequenceGraph* const d_instance) : sequence(sequence), pangenomeGraph(pangenomeGraph), costsDoubleBuffer(costsDoubleBuffer), score({score}), d_instance(d_instance) {
         // Initialize character graphs
         for (::size_t i{0}; i < NUM_BASES; ++i) {
             this->characterGraphs[i] = characterGraphs[i];
@@ -288,7 +278,7 @@ namespace cuSGA {
             const auto updatedCost{(isMatch)? 0 : SequenceGraph::INITIALIZATION_COST};
 
             // Initialize node cost for the next layer
-            costsDoubleBuffer->current()[nodeIdx].store(updatedCost, cuda::std::memory_order_relaxed);
+            costsDoubleBuffer->current()[nodeIdx].store(updatedCost, cuda::memory_order_relaxed);
         }
     }
 
@@ -309,7 +299,7 @@ namespace cuSGA {
             const auto numNeighbors{pangenomeGraph->getNumNeighbors(nodeIdx)};
 
             // Get node cost in the previous layer
-            const auto previousLayerCost{costsDoubleBuffer->alternate()[nodeIdx].load(cuda::std::memory_order_relaxed)};
+            const auto previousLayerCost{costsDoubleBuffer->alternate()[nodeIdx].load(cuda::memory_order_relaxed)};
 
             // Get current DNA base in the sequence
             const auto sequence{sequenceGraph->getSequence()};
@@ -321,7 +311,7 @@ namespace cuSGA {
                 const auto neighborIdx{neighbors[neighborOffset]};
 
                 // Get node cost in the current layer
-                const auto currentLayerCost{costsDoubleBuffer->current()[neighborIdx].load(cuda::std::memory_order_relaxed)};
+                const auto currentLayerCost{costsDoubleBuffer->current()[neighborIdx].load(cuda::memory_order_relaxed)};
 
                 // Compute updated node cost and check for improvement
                 const auto isMatch{pangenomeGraph->getDNABase(neighborIdx) == currentBase};
@@ -346,13 +336,13 @@ namespace cuSGA {
             const auto costsDoubleBuffer{sequenceGraph->getCostsDoubleBuffer()};
 
             // Get node cost in the previous layer
-            const auto previousLayerCost{costsDoubleBuffer->alternate()[nodeIdx].load(cuda::std::memory_order_relaxed)};
+            const auto previousLayerCost{costsDoubleBuffer->alternate()[nodeIdx].load(cuda::memory_order_relaxed)};
 
             // Compute updated node cost
             const auto updatedCost{previousLayerCost + SequenceGraph::DELETION_COST};
 
             // Initialize node cost for the next layer
-            costsDoubleBuffer->current()[nodeIdx].store(updatedCost, cuda::std::memory_order_relaxed);
+            costsDoubleBuffer->current()[nodeIdx].store(updatedCost, cuda::memory_order_relaxed);
         }
     }
 
@@ -396,7 +386,7 @@ namespace cuSGA {
             const auto numNeighbors{pangenomeGraph->getNumNeighbors(nodeIdx)};
 
             // Get node cost in the current layer
-            const auto currentLayerCost{costsDoubleBuffer->current()[nodeIdx].load(cuda::std::memory_order_relaxed)};
+            const auto currentLayerCost{costsDoubleBuffer->current()[nodeIdx].load(cuda::memory_order_relaxed)};
 
             // Loop over all neighbors
             for (::size_t neighborOffset{0}; neighborOffset < numNeighbors; ++neighborOffset) {
@@ -406,7 +396,7 @@ namespace cuSGA {
                 // Check if neighbor base value is different from current DNA base in the sequence (edge is in the character graph)
                 if (const auto neighborBaseValue{pangenomeGraph->getDNABase(neighborIdx)}; neighborBaseValue != currentBase) {
                     // Get node cost in the current layer
-                    const auto currentLayerNeighborCost{costsDoubleBuffer->current()[neighborIdx].load(cuda::std::memory_order_relaxed)};
+                    const auto currentLayerNeighborCost{costsDoubleBuffer->current()[neighborIdx].load(cuda::memory_order_relaxed)};
 
                     // Compute updated node cost and check for improvement
                     if (const auto updatedCost{currentLayerCost + SequenceGraph::INSERTION_COST}; updatedCost < currentLayerNeighborCost) {
@@ -440,7 +430,7 @@ namespace cuSGA {
         const auto stride{::blockDim.x * ::gridDim.x};
         const auto numNodes{pangenomeGraph->getNumNodes()};
         for (::size_t i{threadId}; i < numNodes; i += stride) {
-            if (const ::uint64_t cost{costs[i].load(cuda::std::memory_order_relaxed)}; cost < threadMin) {
+            if (const ::uint64_t cost{costs[i].load(cuda::memory_order_relaxed)}; cost < threadMin) {
                 threadMin = cost;
             }
         }
@@ -475,7 +465,7 @@ namespace cuSGA {
 
             // Final grid-level reduction using the first thread of each block
             if (laneIdx == 0) {
-                sequenceGraph->getAtomicScore().fetch_min(threadMin, cuda::std::memory_order_relaxed);
+                sequenceGraph->getAtomicScore().fetch_min(threadMin, cuda::memory_order_relaxed);
             }
         }
     }

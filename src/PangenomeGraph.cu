@@ -100,22 +100,17 @@ namespace cuSGA {
         // Allocate device pangenome graph buffers
         ::size_t* d_columnValues{nullptr};
         ::size_t* d_rowOffsets{nullptr};
-        ::cudaMalloc(&d_columnValues, numEdges * sizeof(::size_t));
-        KernelUtils::checkLastCudaError();
-        ::cudaMalloc(&d_rowOffsets, (numNodes + 1) * sizeof(::size_t));
-        KernelUtils::checkLastCudaError();
+        KernelUtils::cudaMalloc(&d_columnValues, numEdges * sizeof(::size_t));
+        KernelUtils::cudaMalloc(&d_rowOffsets, (numNodes + 1) * sizeof(::size_t));
 
         // Copy buffers data from host to device
         const auto d_baseValues{baseValues->copyToDevice()};
-        ::cudaMemcpy(d_columnValues, columnValues, numEdges * sizeof(::size_t), ::cudaMemcpyHostToDevice);
-        KernelUtils::checkLastCudaError();
-        ::cudaMemcpy(d_rowOffsets, rowOffsets, (numNodes + 1) * sizeof(::size_t), ::cudaMemcpyHostToDevice);
-        KernelUtils::checkLastCudaError();
+        KernelUtils::cudaMemcpy(d_columnValues, columnValues, numEdges * sizeof(::size_t), ::cudaMemcpyHostToDevice);
+        KernelUtils::cudaMemcpy(d_rowOffsets, rowOffsets, (numNodes + 1) * sizeof(::size_t), ::cudaMemcpyHostToDevice);
 
         // Allocate device pangenome graph instance
         PangenomeGraph* d_pangenomeGraph{nullptr};
-        ::cudaMalloc(&d_pangenomeGraph, sizeof(PangenomeGraph));
-        KernelUtils::checkLastCudaError();
+        KernelUtils::cudaMalloc(&d_pangenomeGraph, sizeof(PangenomeGraph));
 
         // Create temporary host instance holding the device pointers
         const PangenomeGraph devicePangenomeGraph{numNodes, numEdges, d_baseValues, d_columnValues, d_rowOffsets, d_pangenomeGraph};
@@ -124,8 +119,7 @@ namespace cuSGA {
         this->d_instance = d_pangenomeGraph;
 
         // Copy instance data from host to device
-        ::cudaMemcpy(d_pangenomeGraph, &devicePangenomeGraph, sizeof(PangenomeGraph), ::cudaMemcpyHostToDevice);
-        KernelUtils::checkLastCudaError();
+        KernelUtils::cudaMemcpy(d_pangenomeGraph, &devicePangenomeGraph, sizeof(PangenomeGraph), ::cudaMemcpyHostToDevice);
 
         return d_pangenomeGraph;
     }
@@ -135,22 +129,18 @@ namespace cuSGA {
         if (d_instance) {
             // Create a temporary host copy of the device instance to get its internal device pointers
             PangenomeGraph devicePangenomeGraph{};
-            ::cudaMemcpy(&devicePangenomeGraph, d_instance, sizeof(PangenomeGraph), ::cudaMemcpyDeviceToHost);
-            KernelUtils::checkLastCudaError();
+            KernelUtils::cudaMemcpy(&devicePangenomeGraph, d_instance, sizeof(PangenomeGraph), ::cudaMemcpyDeviceToHost);
 
             // Free device pangenome graph buffers
             if (devicePangenomeGraph.columnValues) {
-                ::cudaFree(const_cast<::size_t*>(devicePangenomeGraph.columnValues));
-                KernelUtils::checkLastCudaError();
+                KernelUtils::cudaFree(const_cast<::size_t*>(devicePangenomeGraph.columnValues));
             }
             if (devicePangenomeGraph.rowOffsets) {
-                ::cudaFree(const_cast<::size_t*>(devicePangenomeGraph.rowOffsets));
-                KernelUtils::checkLastCudaError();
+                KernelUtils::cudaFree(const_cast<::size_t*>(devicePangenomeGraph.rowOffsets));
             }
 
             // Free device pangenome graph instance
-            ::cudaFree(d_instance);
-            KernelUtils::checkLastCudaError();
+            KernelUtils::cudaFree(d_instance);
         }
 
         // Free host memory

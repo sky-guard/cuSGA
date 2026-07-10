@@ -6,7 +6,7 @@ namespace cuSGA {
         const auto doubleBuffer{DoubleBuffer<::uint64_t>::create(size)};
 
         // Allocate isInQueue
-        const auto isInQueue{new cuda::atomic<bool, cuda::std::thread_scope_device>[size]{false}};
+        const auto isInQueue{new cuda::atomic<bool, cuda::thread_scope_device>[size]{false}};
 
         // Create frontier instance
         const auto frontier{new Frontier{0, 0, doubleBuffer, isInQueue}};
@@ -21,29 +21,25 @@ namespace cuSGA {
         }
 
         // Allocate device frontier buffers
-        cuda::atomic<bool, cuda::std::thread_scope_device>* d_isInQueue{nullptr};
-        ::cudaMalloc(&d_isInQueue, doubleBuffer->getSize() * sizeof(cuda::atomic<bool, cuda::std::thread_scope_device>));
-        KernelUtils::checkLastCudaError();
+        cuda::atomic<bool, cuda::thread_scope_device>* d_isInQueue{nullptr};
+        KernelUtils::cudaMalloc(&d_isInQueue, doubleBuffer->getSize() * sizeof(cuda::atomic<bool, cuda::thread_scope_device>));
 
         // Copy buffers data from host to device
         const auto d_doubleBuffer{doubleBuffer->copyToDevice()};
-        ::cudaMemcpy(d_isInQueue, isInQueue, doubleBuffer->getSize() * sizeof(cuda::atomic<bool, cuda::std::thread_scope_device>), ::cudaMemcpyHostToDevice);
-        KernelUtils::checkLastCudaError();
+        KernelUtils::cudaMemcpy(d_isInQueue, isInQueue, doubleBuffer->getSize() * sizeof(cuda::atomic<bool, cuda::thread_scope_device>), ::cudaMemcpyHostToDevice);
 
         // Allocate device frontier instance
         Frontier* d_frontier{nullptr};
-        ::cudaMalloc(&d_frontier, sizeof(Frontier));
-        KernelUtils::checkLastCudaError();
+        KernelUtils::cudaMalloc(&d_frontier, sizeof(Frontier));
 
         // Create temporary host instance holding the device pointers
-        const Frontier deviceFrontier{currentSize, alternateSize.load(cuda::std::memory_order_relaxed), d_doubleBuffer, d_isInQueue, d_frontier};
+        const Frontier deviceFrontier{currentSize, alternateSize.load(cuda::memory_order_relaxed), d_doubleBuffer, d_isInQueue, d_frontier};
 
         // Update host instance data
         this->d_instance = d_frontier;
 
         // Copy instance data from host to device
-        ::cudaMemcpy(d_frontier, &deviceFrontier, sizeof(Frontier), ::cudaMemcpyHostToDevice);
-        KernelUtils::checkLastCudaError();
+        KernelUtils::cudaMemcpy(d_frontier, &deviceFrontier, sizeof(Frontier), ::cudaMemcpyHostToDevice);
 
         return d_frontier;
     }
@@ -53,18 +49,15 @@ namespace cuSGA {
         if (d_instance) {
             // Create a temporary host copy of the device instance to get internal pointers
             Frontier deviceFrontier{};
-            ::cudaMemcpy(&deviceFrontier, d_instance, sizeof(Frontier), ::cudaMemcpyDeviceToHost);
-            KernelUtils::checkLastCudaError();
+            KernelUtils::cudaMemcpy(&deviceFrontier, d_instance, sizeof(Frontier), ::cudaMemcpyDeviceToHost);
 
             // Free device frontier buffers
             if (deviceFrontier.isInQueue) {
-                ::cudaFree(deviceFrontier.isInQueue);
-                KernelUtils::checkLastCudaError();
+                KernelUtils::cudaFree(deviceFrontier.isInQueue);
             }
 
             // Free device frontier instance
-            ::cudaFree(d_instance);
-            KernelUtils::checkLastCudaError();
+            KernelUtils::cudaFree(d_instance);
         }
 
         // Free host memory
@@ -86,8 +79,7 @@ namespace cuSGA {
     __host__ bool Frontier::isEmptySync() {
         // Copy back current size from device
         if (d_instance) {
-            ::cudaMemcpy(&this->currentSize, &d_instance->currentSize, sizeof(currentSize), ::cudaMemcpyDeviceToHost);
-            KernelUtils::checkLastCudaError();
+            KernelUtils::cudaMemcpy(&this->currentSize, &d_instance->currentSize, sizeof(currentSize), ::cudaMemcpyDeviceToHost);
         }
 
         return currentSize == 0;
@@ -111,9 +103,9 @@ namespace cuSGA {
 
     __host__ __device__ void Frontier::atomicInsertAndGrow(const ::uint64_t nodeIdx) {
         // Insert atomically in queue
-        if (const auto wasInQueue{isInQueue[nodeIdx].exchange(true, cuda::std::memory_order_relaxed)}; !wasInQueue) {
+        if (const auto wasInQueue{isInQueue[nodeIdx].exchange(true, cuda::memory_order_relaxed)}; !wasInQueue) {
             // Grow queue size atomically
-            const auto oldSize{alternateSize.fetch_add(1, cuda::std::memory_order_relaxed)};
+            const auto oldSize{alternateSize.fetch_add(1, cuda::memory_order_relaxed)};
 
             // Insert node into next frontier
             doubleBuffer->alternate()[oldSize] = nodeIdx;
@@ -125,11 +117,11 @@ namespace cuSGA {
         this->doubleBuffer->swap();
 
         // Swap sizes
-        this->currentSize = alternateSize.load(cuda::std::memory_order_relaxed);
-        this->alternateSize.store(0, cuda::std::memory_order_relaxed);
+        this->currentSize = alternateSize.load(cuda::memory_order_relaxed);
+        this->alternateSize.store(0, cuda::memory_order_relaxed);
 
         // Clear isInQueue
-        ::memset(isInQueue, false, doubleBuffer->getSize() * sizeof(cuda::atomic<bool, cuda::std::thread_scope_device>));
+        ::memset(isInQueue, false, doubleBuffer->getSize() * sizeof(cuda::atomic<bool, cuda::thread_scope_device>));
     }
 
     __host__ void Frontier::swapToQueueSync() const {
@@ -139,52 +131,46 @@ namespace cuSGA {
         if (d_instance) {
             // Get device instance
             Frontier deviceFrontier{};
-            ::cudaMemcpy(&deviceFrontier, d_instance, sizeof(Frontier), ::cudaMemcpyDeviceToHost);
-            KernelUtils::checkLastCudaError();
+            KernelUtils::cudaMemcpy(&deviceFrontier, d_instance, sizeof(Frontier), ::cudaMemcpyDeviceToHost);
 
             // Swap sizes
-            deviceFrontier.currentSize = deviceFrontier.alternateSize.load(cuda::std::memory_order_relaxed);
-            deviceFrontier.alternateSize.store(0, cuda::std::memory_order_relaxed);
+            deviceFrontier.currentSize = deviceFrontier.alternateSize.load(cuda::memory_order_relaxed);
+            deviceFrontier.alternateSize.store(0, cuda::memory_order_relaxed);
 
             // Clear isInQueue
-            ::cudaMemset(deviceFrontier.isInQueue, false, doubleBuffer->getSize() * sizeof(cuda::atomic<bool, cuda::std::thread_scope_device>));
-            KernelUtils::checkLastCudaError();
+            KernelUtils::cudaMemset(deviceFrontier.isInQueue, false, doubleBuffer->getSize() * sizeof(cuda::atomic<bool, cuda::thread_scope_device>));
 
             // Update device instance
-            ::cudaMemcpy(d_instance, &deviceFrontier, sizeof(Frontier), ::cudaMemcpyHostToDevice);
-            KernelUtils::checkLastCudaError();
+            KernelUtils::cudaMemcpy(d_instance, &deviceFrontier, sizeof(Frontier), ::cudaMemcpyHostToDevice);
         }
     }
 
     __host__ __device__ void Frontier::empty() {
         // Clear (virtually) the buffers
         this->currentSize = 0;
-        this->alternateSize.store(0, cuda::std::memory_order_relaxed);
+        this->alternateSize.store(0, cuda::memory_order_relaxed);
 
         // Clear isInQueue
-        ::memset(isInQueue, false, doubleBuffer->getSize() * sizeof(cuda::atomic<bool, cuda::std::thread_scope_device>));
+        ::memset(isInQueue, false, doubleBuffer->getSize() * sizeof(cuda::atomic<bool, cuda::thread_scope_device>));
     }
 
     __host__ void Frontier::emptySync() const {
         if (d_instance) {
             // Get device instance
             Frontier deviceFrontier{};
-            ::cudaMemcpy(&deviceFrontier, d_instance, sizeof(Frontier), ::cudaMemcpyDeviceToHost);
-            KernelUtils::checkLastCudaError();
+            KernelUtils::cudaMemcpy(&deviceFrontier, d_instance, sizeof(Frontier), ::cudaMemcpyDeviceToHost);
 
             // Clear (virtually) the device buffers
             deviceFrontier.currentSize = 0;
-            deviceFrontier.alternateSize.store(0, cuda::std::memory_order_relaxed);
+            deviceFrontier.alternateSize.store(0, cuda::memory_order_relaxed);
 
             // Clear isInQueue
-            ::cudaMemset(deviceFrontier.isInQueue, 0, doubleBuffer->getSize() * sizeof(cuda::atomic<bool, cuda::std::thread_scope_device>));
-            KernelUtils::checkLastCudaError();
+            KernelUtils::cudaMemset(deviceFrontier.isInQueue, 0, doubleBuffer->getSize() * sizeof(cuda::atomic<bool, cuda::thread_scope_device>));
 
             // Update device instance
-            ::cudaMemcpy(d_instance, &deviceFrontier, sizeof(Frontier), ::cudaMemcpyHostToDevice);
-            KernelUtils::checkLastCudaError();
+            KernelUtils::cudaMemcpy(d_instance, &deviceFrontier, sizeof(Frontier), ::cudaMemcpyHostToDevice);
         }
     }
 
-    __host__ __device__ Frontier::Frontier(const ::uint64_t currentSize, const ::uint64_t alternateSize, DoubleBuffer<::uint64_t>* doubleBuffer, cuda::atomic<bool, cuda::std::thread_scope_device>* isInQueue, Frontier* const d_instance) : currentSize(currentSize), alternateSize({alternateSize}), doubleBuffer(doubleBuffer), isInQueue(isInQueue), d_instance(d_instance) {}
+    __host__ __device__ Frontier::Frontier(const ::uint64_t currentSize, const ::uint64_t alternateSize, DoubleBuffer<::uint64_t>* doubleBuffer, cuda::atomic<bool, cuda::thread_scope_device>* isInQueue, Frontier* const d_instance) : currentSize(currentSize), alternateSize({alternateSize}), doubleBuffer(doubleBuffer), isInQueue(isInQueue), d_instance(d_instance) {}
 } //cuSGA

@@ -77,17 +77,14 @@ namespace cuSGA {
         // Allocate device sequence buffer
         const auto numChunks{(numBases + PACKING_FACTOR - 1) / PACKING_FACTOR};
         ::uint64_t* d_bases{nullptr};
-        ::cudaMalloc(&d_bases, numChunks * sizeof(::uint64_t));
-        KernelUtils::checkLastCudaError();
+        KernelUtils::cudaMalloc(&d_bases, numChunks * sizeof(::uint64_t));
 
         // Copy buffer data from host to device
-        ::cudaMemcpy(d_bases, bases, numChunks * sizeof(::uint64_t), ::cudaMemcpyHostToDevice);
-        KernelUtils::checkLastCudaError();
+        KernelUtils::cudaMemcpy(d_bases, bases, numChunks * sizeof(::uint64_t), ::cudaMemcpyHostToDevice);
 
         // Allocate device sequence instance
         PackedDNASequence* d_sequence{nullptr};
-        ::cudaMalloc(&d_sequence, sizeof(PackedDNASequence));
-        KernelUtils::checkLastCudaError();
+        KernelUtils::cudaMalloc(&d_sequence, sizeof(PackedDNASequence));
 
         // Create temporary host instance holding the device pointers
         const PackedDNASequence deviceSequence{numBases, d_bases, d_sequence};
@@ -96,8 +93,7 @@ namespace cuSGA {
         this->d_instance = d_sequence;
 
         // Copy instance data from host to device
-        ::cudaMemcpy(d_sequence, &deviceSequence, sizeof(PackedDNASequence), ::cudaMemcpyHostToDevice);
-        KernelUtils::checkLastCudaError();
+        KernelUtils::cudaMemcpy(d_sequence, &deviceSequence, sizeof(PackedDNASequence), ::cudaMemcpyHostToDevice);
 
         return d_sequence;
     }
@@ -107,18 +103,15 @@ namespace cuSGA {
         if (d_instance) {
             // Create a temporary host copy of the device instance to get its internal device pointers
             PackedDNASequence deviceSequence{};
-            ::cudaMemcpy(&deviceSequence, d_instance, sizeof(PackedDNASequence), ::cudaMemcpyDeviceToHost);
-            KernelUtils::checkLastCudaError();
+            KernelUtils::cudaMemcpy(&deviceSequence, d_instance, sizeof(PackedDNASequence), ::cudaMemcpyDeviceToHost);
 
             // Free device sequence buffer
             if (deviceSequence.bases) {
-                cudaFree(const_cast<::uint64_t*>(deviceSequence.bases));
-                KernelUtils::checkLastCudaError();
+                KernelUtils::cudaFree(const_cast<::uint64_t*>(deviceSequence.bases));
             }
 
             // Free device graph instance
-            ::cudaFree(d_instance);
-            KernelUtils::checkLastCudaError();
+            KernelUtils::cudaFree(d_instance);
         }
 
         // Free host memory
