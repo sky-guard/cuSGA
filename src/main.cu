@@ -14,13 +14,16 @@ int main(const int argc, const char* const argv[]) {
         }
 
         // Create sequence graph instance
-        const auto sequenceGraph{::cuSGA::SequenceGraph::createFromFiles(parsedArguments.sequenceFileName, parsedArguments.pangenomeGraphFileName)};
+        const auto sequenceGraph{::cuSGA::SequenceGraph::createFromFiles(parsedArguments.pangenomeGraphFileName)};
 
         // Align sequence to graph
-        const auto score{sequenceGraph->align()};
+        const auto scores{sequenceGraph->align(parsedArguments.sequenceFileName)};
 
         // Print results
-        ::std::cout << ::std::format("cuSGA Alignment Score: {}.", score) << ::std::endl;
+        ::std::cout << "cuSGA Alignment Scores: " << std::endl;
+        for (const auto score: scores) {
+            ::std::cout << std::to_string(score) + " ";
+        }
 
         // Free memory
         sequenceGraph->free();

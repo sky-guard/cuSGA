@@ -18,7 +18,7 @@ namespace cuSGA {
         static constexpr ::size_t SCORE_MAX_VALUE{::std::numeric_limits<::uint64_t>::max()};
 
         // Create sequence graph from file
-        __host__ static SequenceGraph* createFromFiles(const ::std::string& sequenceFileName, const ::std::string& pangenomeGraphFileName);
+        __host__ static SequenceGraph* createFromFiles(const ::std::string& pangenomeGraphFileName);
 
         // Move sequence graph to device
         __host__ SequenceGraph* copyToDevice();
@@ -40,8 +40,13 @@ namespace cuSGA {
         // Get device instance
         __host__ __device__ SequenceGraph* getDeviceInstance() const;
 
+        // Reset score
+        __host__ __device__ void resetScore();
+        // Reset device score
+        __host__ void resetScoreSync() const;
+
         // Align sequence
-        __host__ ::uint64_t align();
+        __host__ ::std::vector<::uint64_t> align(const ::std::string& sequenceFileName);
         // Perform initialization step
         __host__ void initialize(bool sync = true);
         // Perform substitutions for a given layer index

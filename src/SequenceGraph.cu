@@ -6,9 +6,9 @@
 #include "KernelUtils.cuh"
 
 namespace cuSGA {
-    __host__ SequenceGraph* SequenceGraph::createFromFiles(const ::std::string& sequenceFileName, const ::std::string& pangenomeGraphFileName) {
+    __host__ SequenceGraph* SequenceGraph::createFromFiles(const ::std::string& pangenomeGraphFileName) {
         // Read sequence from file
-        const auto sequence{PackedDNASequence::createFromFile(sequenceFileName)};
+        const auto sequence{PackedDNASequence::create()};
 
         // Read pangenome graph from file
         const auto pangenomeGraph{PangenomeGraph::createFromFile(pangenomeGraphFileName)};
@@ -103,11 +103,25 @@ namespace cuSGA {
         return d_instance;
     }
 
-    __host__ uint64_t SequenceGraph::align() {
-        // Check for non-empty sequence
-        if (sequence->getNumBases() == 0) {
-            throw ::std::runtime_error{"Unable to align an empty sequence!"};
+    __host__ __device__ void SequenceGraph::resetScore() {
+        this->score.store(SCORE_MAX_VALUE, cuda::memory_order_relaxed);
+    }
+
+    __host__ void SequenceGraph::resetScoreSync() const {
+        if (d_instance) {
+            KernelUtils::cudaMemcpy(&d_instance->score, &SCORE_MAX_VALUE, sizeof(score), ::cudaMemcpyHostToDevice);
         }
+    }
+
+    __host__ ::std::vector<uint64_t> SequenceGraph::align(const ::std::string& sequenceFileName) {
+        // Open file
+        ::std::ifstream sequenceFile{sequenceFileName};
+        if (!sequenceFile.is_open()) {
+            throw ::std::runtime_error{::std::format("Unable to open file: {}", sequenceFileName)};
+        }
+
+        // Create scores instance
+        ::std::vector<::uint64_t> scores{};
 
         // Copy sequence graph instance to device
         copyToDevice();
@@ -118,49 +132,65 @@ namespace cuSGA {
         // Copy frontier to device
         frontier->copyToDevice();
 
-        // Perform initialization step
-        initialize(false);
-
-        // Swap costs double buffer for the next layer
-        costsDoubleBuffer->swapSync();
-
-        // Solve alignment layer by layer
-        for (::size_t layerIdx{1}; layerIdx < sequence->getNumBases(); ++layerIdx) {
-            // Perform deletions for the given layer
-            deletions(layerIdx,false);
-
-            // Perform substitutions for the given layer
-            substitutions(layerIdx, false);
-
-            // Skip insertions and propagations for the last layer
-            if (layerIdx < sequence->getNumBases() - 1) {
-                // Empty frontier
-                frontier->emptySync();
-
-                // Perform insertions for the given layer
-                insertions(frontier, false);
-
-                // Perform propagations for the given layer
-                while (!frontier->isEmptySync()) {
-                    propagations(layerIdx, frontier, false);
-                    frontier->swapToQueueSync();
-                }
-
-                // Swap costs double buffer for the next layer
-                costsDoubleBuffer->swapSync();
+        while (sequence->readFromFile(sequenceFileName, sequenceFile)) {
+            // Check for non-empty sequence
+            if (sequence->getNumBases() == 0) {
+                throw ::std::runtime_error{"Unable to align an empty sequence!"};
             }
+
+            // Perform initialization step
+            initialize(false);
+
+            // Swap costs double buffer for the next layer
+            costsDoubleBuffer->swapSync();
+
+            // Solve alignment layer by layer
+            for (::size_t layerIdx{1}; layerIdx < sequence->getNumBases(); ++layerIdx) {
+                // Perform deletions for the given layer
+                deletions(layerIdx,false);
+
+                // Perform substitutions for the given layer
+                substitutions(layerIdx, false);
+
+                // Skip insertions and propagations for the last layer
+                if (layerIdx < sequence->getNumBases() - 1) {
+                    // Empty frontier
+                    frontier->emptySync();
+
+                    // Perform insertions for the given layer
+                    insertions(frontier, false);
+
+                    // Perform propagations for the given layer
+                    while (!frontier->isEmptySync()) {
+                        propagations(layerIdx, frontier, false);
+                        frontier->swapToQueueSync();
+                    }
+
+                    // Swap costs double buffer for the next layer
+                    costsDoubleBuffer->swapSync();
+                }
+            }
+
+            // Compute minimum score
+            minScore(true);
+
+            // Copy back score from device
+            const auto score{getScoreSync()};
+
+            // Save score
+            scores.emplace_back(score);
+
+            // Reset score
+            resetScoreSync();
         }
 
         // Delete frontier instance
         frontier->free();
 
-        // Compute minimum score
-        minScore(true);
+        // Close file
+        sequenceFile.close();
 
-        // Copy back score from device
-        const auto score{getScoreSync()};
-
-        return score;
+        return scores;
     }
 
     __host__ void SequenceGraph::initialize(const bool sync) {
