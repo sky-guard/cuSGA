@@ -5,54 +5,20 @@
 #include "Frontier.cuh"
 #include "KernelUtils.cuh"
 
-
-// TODO: Remove after debugging is done.
-__global__ void printCosts(const cuSGA::SequenceGraph* const sequenceGraph, const ::size_t layerIdx) {
-    const auto nodeIdx{::blockIdx.x * ::blockDim.x + ::threadIdx.x};
-    const auto numNodes{sequenceGraph->getPangenomeGraph()->getNumNodes()};
-    const auto costs{sequenceGraph->getCostsDoubleBuffer()->current()};
-
-    if (nodeIdx < numNodes) {
-        // Cast 64-bit integers to unsigned long long and use %llu
-        ::printf("[Layer %llu] Node %u: %llu.\n",
-                 static_cast<unsigned long long>(layerIdx),
-                 static_cast<unsigned int>(nodeIdx),
-                 static_cast<unsigned long long>(costs[nodeIdx].load(::cuda::memory_order_relaxed)));
-    }
-}
-
 namespace cuSGA {
-    __host__ SequenceGraph* SequenceGraph::createFromFiles(const ::std::string& sequenceFileName, const ::std::string& pangenomeGraphFileName, const ::std::string (& characterGraphFileNames)[NUM_BASES], const bool computeCharacterGraphs) {
+    __host__ SequenceGraph* SequenceGraph::createFromFiles(const ::std::string& sequenceFileName, const ::std::string& pangenomeGraphFileName) {
         // Read sequence from file
         const auto sequence{PackedDNASequence::createFromFile(sequenceFileName)};
 
         // Read pangenome graph from file
         const auto pangenomeGraph{PangenomeGraph::createFromFile(pangenomeGraphFileName)};
 
-        // Read or compute and store character graphs from files
-        PangenomeGraph* characterGraphs[NUM_BASES]{nullptr};
-        // TODO: Add back if character graphs are needed.
-        // for (::size_t i{0}; i < NUM_BASES; ++i) {
-        //     // Get character graph file name
-        //     const auto characterGraphFileName{characterGraphFileNames[i]};
-
-        //     if (computeCharacterGraphs) {
-        //         // Compute character graph and store to file
-        //         ::std::exit(-1);
-        //     }
-        //     else {
-        //         // Read character graph from file
-        //         ::std::ifstream characterGraphFile{characterGraphFileName};
-        //         characterGraphs[i] = PangenomeGraph::createFromFile(characterGraphFileName, characterGraphFile, pangenomeGraph->getNumNodes(), ::std::nullopt, pangenomeGraph->getBaseValues());
-        //     }
-        // }
-
         // Create costs double buffer instance
         const auto numNodes{pangenomeGraph->getNumNodes()};
         const auto costsDoubleBuffer{DoubleBuffer<::cuda::atomic<::uint64_t, ::cuda::thread_scope_device>>::create(numNodes)};
 
         // Create sequence graph instance
-        const auto sequenceGraph{new SequenceGraph{sequence, pangenomeGraph, characterGraphs, costsDoubleBuffer}};
+        const auto sequenceGraph{new SequenceGraph{sequence, pangenomeGraph, costsDoubleBuffer}};
 
         return sequenceGraph;
     }
@@ -66,11 +32,6 @@ namespace cuSGA {
         // Copy buffers data from host to device
         const auto d_sequence{sequence->copyToDevice()};
         const auto d_pangenomeGraph{pangenomeGraph->copyToDevice()};
-        PangenomeGraph* d_characterGraphs[NUM_BASES]{nullptr};
-        // TODO: Add back if character graphs are needed.
-        // for (::size_t i{0}; i < NUM_BASES; ++i) {
-        //     d_characterGraphs[i] = characterGraphs[i]->copyToDevice();
-        // }
         const auto d_costsDoubleBuffer{costsDoubleBuffer->copyToDevice()};
 
         // Allocate device pangenome graph instance
@@ -78,7 +39,7 @@ namespace cuSGA {
         KernelUtils::cudaMalloc(&d_sequenceGraph, sizeof(SequenceGraph));
 
         // Create temporary host instance holding the device pointers
-        const SequenceGraph deviceSequenceGraph{d_sequence, d_pangenomeGraph, d_characterGraphs, d_costsDoubleBuffer, score.load(::cuda::memory_order_relaxed), d_instance};
+        const SequenceGraph deviceSequenceGraph{d_sequence, d_pangenomeGraph, d_costsDoubleBuffer, score.load(::cuda::memory_order_relaxed), d_instance};
 
         // Update host instance data
         this->d_instance = d_sequenceGraph;
@@ -100,11 +61,6 @@ namespace cuSGA {
         if (sequence) {
             this->sequence->free();
         }
-        for (::size_t i{0}; i < NUM_BASES; ++i) {
-            if (characterGraphs[i]) {
-                this->characterGraphs[i]->free();
-            }
-        }
         if (pangenomeGraph) {
             this->pangenomeGraph->free(true);
         }
@@ -120,10 +76,6 @@ namespace cuSGA {
 
     __host__ __device__ PangenomeGraph* SequenceGraph::getPangenomeGraph() const {
         return pangenomeGraph;
-    }
-
-    __host__ __device__ PangenomeGraph* SequenceGraph::getCharacterGraph(const DNABase base) const {
-        return characterGraphs[static_cast<::uint8_t>(base)];
     }
 
     __host__ __device__ DoubleBuffer<::cuda::atomic<::uint64_t, ::cuda::thread_scope_device>>* SequenceGraph::getCostsDoubleBuffer() const {
@@ -194,15 +146,8 @@ namespace cuSGA {
                     frontier->swapToQueueSync();
                 }
 
-                // TODO: Remove after debugging is done.
-                // KernelUtils::launchKernel<printCosts>(0, 0, pangenomeGraph->getNumNodes(), true, d_instance, layerIdx);
-
                 // Swap costs double buffer for the next layer
                 costsDoubleBuffer->swapSync();
-            }
-            // TODO: Remove after debugging is done.
-            else {
-                // KernelUtils::launchKernel<printCosts>(0, 0, pangenomeGraph->getNumNodes(), true, d_instance, layerIdx);
             }
         }
 
@@ -248,12 +193,7 @@ namespace cuSGA {
         KernelUtils::cudaLaunchKernel<SequenceGraphKernels::minScore>(SequenceGraphKernels::MIN_SCORE_DYNAMIC_SMEM_SIZE, SequenceGraphKernels::MIN_SCORE_MAX_BLOCK_SIZE, pangenomeGraph->getNumNodes(), sync, d_instance);
     }
 
-    __host__ __device__ SequenceGraph::SequenceGraph(PackedDNASequence* const sequence, PangenomeGraph* const pangenomeGraph, PangenomeGraph* const (& characterGraphs)[NUM_BASES], DoubleBuffer<::cuda::atomic<::uint64_t, ::cuda::thread_scope_device>>* const costsDoubleBuffer, const ::uint64_t score, SequenceGraph* const d_instance) : sequence(sequence), pangenomeGraph(pangenomeGraph), costsDoubleBuffer(costsDoubleBuffer), score({score}), d_instance(d_instance) {
-        // Initialize character graphs
-        for (::size_t i{0}; i < NUM_BASES; ++i) {
-            this->characterGraphs[i] = characterGraphs[i];
-        }
-    }
+    __host__ __device__ SequenceGraph::SequenceGraph(PackedDNASequence* const sequence, PangenomeGraph* const pangenomeGraph, DoubleBuffer<::cuda::atomic<::uint64_t, ::cuda::thread_scope_device>>* const costsDoubleBuffer, const ::uint64_t score, SequenceGraph* const d_instance) : sequence(sequence), pangenomeGraph(pangenomeGraph), costsDoubleBuffer(costsDoubleBuffer), score({score}), d_instance(d_instance) {}
 
     __global__ void SequenceGraphKernels::initialize(const SequenceGraph* sequenceGraph) {
         // Get thread node index

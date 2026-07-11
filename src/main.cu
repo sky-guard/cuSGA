@@ -14,7 +14,7 @@ int main(const int argc, const char* const argv[]) {
         }
 
         // Create sequence graph instance
-        const auto sequenceGraph{::cuSGA::SequenceGraph::createFromFiles(parsedArguments.sequenceFileName, parsedArguments.pangenomeGraphFileName, parsedArguments.characterGraphFileNames, parsedArguments.computeCharacterGraphs)};
+        const auto sequenceGraph{::cuSGA::SequenceGraph::createFromFiles(parsedArguments.sequenceFileName, parsedArguments.pangenomeGraphFileName)};
 
         // Align sequence to graph
         const auto score{sequenceGraph->align()};

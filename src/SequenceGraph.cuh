@@ -18,7 +18,7 @@ namespace cuSGA {
         static constexpr ::size_t SCORE_MAX_VALUE{::std::numeric_limits<::uint64_t>::max()};
 
         // Create sequence graph from file
-        __host__ static SequenceGraph* createFromFiles(const ::std::string& sequenceFileName, const ::std::string& pangenomeGraphFileName, const ::std::string (& characterGraphFileNames)[NUM_BASES], bool computeCharacterGraphs = false);
+        __host__ static SequenceGraph* createFromFiles(const ::std::string& sequenceFileName, const ::std::string& pangenomeGraphFileName);
 
         // Move sequence graph to device
         __host__ SequenceGraph* copyToDevice();
@@ -29,8 +29,6 @@ namespace cuSGA {
         __host__ __device__ PackedDNASequence* getSequence() const;
         // Get pangenome graph
         __host__ __device__ PangenomeGraph* getPangenomeGraph() const;
-        // Get character graph for a given DNA base
-        __host__ __device__ PangenomeGraph* getCharacterGraph(DNABase base) const;
         // Get costs double buffer
         __host__ __device__ DoubleBuffer<::cuda::atomic<::uint64_t, ::cuda::thread_scope_device>>* getCostsDoubleBuffer() const;
         // Get score
@@ -61,7 +59,6 @@ namespace cuSGA {
         // Sequence graph implementation
         PackedDNASequence* sequence{nullptr};
         PangenomeGraph* pangenomeGraph{nullptr};
-        PangenomeGraph* characterGraphs[NUM_BASES]{nullptr};
         DoubleBuffer<::cuda::atomic<::uint64_t, ::cuda::thread_scope_device>>* costsDoubleBuffer{nullptr};
         ::cuda::atomic<::uint64_t, ::cuda::thread_scope_device> score{SCORE_MAX_VALUE};
         SequenceGraph* d_instance{nullptr};
@@ -69,7 +66,7 @@ namespace cuSGA {
         // Default constructor
         SequenceGraph() = default;
         // Sequence graph constructor
-        __host__ __device__ SequenceGraph(PackedDNASequence* sequence, PangenomeGraph* pangenomeGraph, PangenomeGraph* const (& characterGraphs)[NUM_BASES], DoubleBuffer<::cuda::atomic<::uint64_t, ::cuda::thread_scope_device>>* costsDoubleBuffer = nullptr, ::uint64_t score = SCORE_MAX_VALUE, SequenceGraph* d_instance = nullptr);
+        __host__ __device__ SequenceGraph(PackedDNASequence* sequence, PangenomeGraph* pangenomeGraph, DoubleBuffer<::cuda::atomic<::uint64_t, ::cuda::thread_scope_device>>* costsDoubleBuffer = nullptr, ::uint64_t score = SCORE_MAX_VALUE, SequenceGraph* d_instance = nullptr);
     };
 
     namespace SequenceGraphKernels {
