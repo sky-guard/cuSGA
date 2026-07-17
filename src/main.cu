@@ -14,7 +14,7 @@ int main(const int argc, const char* const argv[]) {
         }
 
         // Create sequence graph instance
-        const auto sequenceGraph{::cuSGA::SequenceGraph::createFromFiles(parsedArguments.pangenomeGraphFileName)};
+        const auto sequenceGraph{::cuSGA::SequenceGraph::createFromFiles(parsedArguments.pangenomeGraphFileName, parsedArguments.connectedComponentsFileNames)};
 
         // Align sequence to graph
         const auto scores{sequenceGraph->align(parsedArguments.sequenceFileName)};
@@ -22,7 +22,7 @@ int main(const int argc, const char* const argv[]) {
         // Print results
         ::std::cout << "cuSGA Alignment Scores: " << std::endl;
         for (const auto score: scores) {
-            ::std::cout << std::to_string(score) + " ";
+            ::std::cout << ::std::format("{} ", score);
         }
 
         // Free memory

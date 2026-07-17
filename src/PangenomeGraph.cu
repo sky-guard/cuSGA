@@ -6,198 +6,180 @@
 #include "KernelUtils.cuh"
 
 namespace cuSGA {
-    __host__ PangenomeGraph* PangenomeGraph::createFromFile(const ::std::string& fileName) {
-        // Open pangenome graph file
-        ::std::ifstream file{fileName};
-        if (!file.is_open()) {
-            throw ::std::runtime_error{::std::format("Unable to open file: {}", fileName)};
+    __host__ PangenomeGraph::PangenomeGraph(const ::std::string& fileName, bool ownsInstance, PangenomeGraph* pinned_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) : PangenomeGraph(0, PackedDNASequence{}, nullptr, nullptr, ownsInstance, pinned_instanceOptional) {
+        // Get allocator
+        KernelUtils::BumpPtrAllocator* allocator{allocatorOptional};
+        KernelUtils::BumpPtrAllocator allocatorInstance{};
+        if (!allocator) {
+            allocator = &allocatorInstance;
         }
 
-        // Read pangenome graph from file
-        const auto pangenomeGraph{createFromFile(fileName, file)};
+        // Open file
+        auto file{Utils::openFile(fileName)};
 
-        // Close pangenome graph file
+        // Read number of nodes from file
+        ::size_t numNodes{0};
+        if (!(file >> numNodes)) {
+            throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", fileName)};
+        }
+
+        // Read number of edges from file
+        ::size_t numEdges{0};
+        if (!(file >> numEdges)) {
+            throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", fileName)};
+        }
+
+        // Close file
         file.close();
 
-        return pangenomeGraph;
+        // Grow allocator
+        if (ownsInstance) {
+            allocator->emplaceReserve<PangenomeGraph>();
+            growBuffers(allocator, numNodes, numEdges);
+        }
+
+        // Initialize allocator
+        if (ownsInstance) {
+            allocator->initHostPinnedMem();
+        }
+
+        // Emplace buffers
+        if (ownsInstance) {
+            this->pinned_instance = allocator->emplaceReserve<PangenomeGraph>();
+        }
+        this->numEdges = numEdges;
+        this->baseValues = PackedDNASequence{fileName, &file, false, numNodes, &pinned_instance->baseValues, allocator};
+        this->columnValues = allocator->emplaceReserve<::std::remove_pointer_t<decltype(columnValues)>>(numEdges);
+        this->rowOffsets = allocator->emplaceReserve<::std::remove_pointer_t<decltype(rowOffsets)>>(numNodes + 1);
     }
 
-    __host__ PangenomeGraph* PangenomeGraph::createFromFile(const ::std::string& fileName, ::std::ifstream& file, ::std::optional<::size_t> numNodes, ::std::optional<::size_t> numEdges, ::std::optional<PackedDNASequence*> baseValues, ::std::optional<const ::size_t*> columnValues, ::std::optional<const ::size_t*> rowOffsets) {
+    __host__ PangenomeGraph::PangenomeGraph(const ::std::string& fileName, ::std::ifstream* file, const bool ownsInstance, ::std::optional<::size_t> numNodesOptional, ::std::optional<::size_t> numEdgesOptional, PangenomeGraph* pinned_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) : PangenomeGraph(0, PackedDNASequence{}, nullptr, nullptr, ownsInstance, pinned_instanceOptional) {
+        // Get allocator
+        KernelUtils::BumpPtrAllocator* allocator{allocatorOptional};
+        KernelUtils::BumpPtrAllocator allocatorInstance{};
+        if (!allocator) {
+            allocator = &allocatorInstance;
+        }
+
         // Read number of nodes from file if missing
-        if (!numNodes.has_value()) {
-            ::size_t numNodesValue{0};
-            if (!(file >> numNodesValue)) {
+        if (!numNodesOptional.has_value()) {
+            ::size_t numNodes{0};
+            if (!(*file >> numNodes)) {
                 throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", fileName)};
             }
-
-            // Assign value
-            numNodes = numNodesValue;
+            numNodesOptional = numNodes;
         }
 
         // Read number of edges from file if missing
-        if (!numEdges.has_value()) {
-            ::size_t numEdgesValue{0};
-            if (!(file >> numEdgesValue)) {
+        if (!numEdgesOptional.has_value()) {
+            ::size_t numEdges{0};
+            if (!(*file >> numEdges)) {
                 throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", fileName)};
             }
-
-            // Assign value
-            numEdges = numEdgesValue;
+            numEdgesOptional = numEdges;
         }
 
-        // Read nodes from file if missing
-        if (!baseValues.has_value()) {
-            // Assign value
-            baseValues = PackedDNASequence::createFromFile(fileName, file, numNodes);
+        // Grow allocator
+        if (ownsInstance) {
+            allocator->emplaceReserve<PangenomeGraph>();
+            growBuffers(allocator, numNodesOptional.value(), numNodesOptional.value());
         }
 
-        // Read row offsets from file if missing
-        if (!rowOffsets.has_value()) {
-            // Allocate buffer
-            const auto numNodesValue{numNodes.value()};
-            const auto rowOffsetsValue{new ::size_t[numNodesValue + 1]{}};
+        // Initialize allocator
+        if (ownsInstance) {
+            allocator->initHostPinnedMem();
+        }
 
-            // Read the row offsets from file
-            for (::size_t i{0}; i <= numNodesValue; ++i) {
-                if (!(file >> rowOffsetsValue[i])) {
-                    throw ::std::runtime_error{::std::format("An error occurred while reading CSR row offsets from file: {}", fileName)};
-                }
+        // Emplace buffers
+        if (ownsInstance) {
+            this->pinned_instance = allocator->emplaceReserve<PangenomeGraph>();
+        }
+        this->numEdges = numEdgesOptional.value();
+        this->baseValues = PackedDNASequence{fileName, file, false, numNodesOptional.value(), &pinned_instance->baseValues, allocator};
+        this->columnValues = allocator->emplaceReserve<::std::remove_pointer_t<decltype(columnValues)>>(numEdges);
+        this->rowOffsets = allocator->emplaceReserve<::std::remove_pointer_t<decltype(rowOffsets)>>(numNodesOptional.value() + 1);
+
+        // Read row offsets from file
+        for (::size_t i{0}; i <= numNodesOptional.value(); ++i) {
+            if (!(*file >> rowOffsets[i])) {
+                throw ::std::runtime_error{::std::format("An error occurred while reading CSR row offsets from file: {}", fileName)};
             }
-
-            // Assign value
-            rowOffsets = rowOffsetsValue;
         }
 
-        // Read column values from file if missing
-        if (!columnValues.has_value() || !rowOffsets.has_value()) {
-            // Allocate buffer
-            const auto numEdgesValue{numEdges.value()};
-            const auto columnValuesValue{new ::size_t[numEdgesValue]{}};
-
-            // Read the column values from file
-            for (::size_t i{0}; i < numEdgesValue; ++i) {
-                if (!(file >> columnValuesValue[i])) {
-                    throw ::std::runtime_error{::std::format("An error occurred while reading CSR column values from file: {}", fileName)};
-                }
+        // Read column values from file
+        for (::size_t i{0}; i < numEdges; ++i) {
+            if (!(*file >> columnValues[i])) {
+                throw ::std::runtime_error{::std::format("An error occurred while reading CSR column values from file: {}", fileName)};
             }
-
-            // Assign value
-            columnValues = columnValuesValue;
         }
-
-        // Create pangenome graph instance
-        const auto pangenomeGraph{new PangenomeGraph{numNodes.value(), numEdges.value(), baseValues.value(), columnValues.value(), rowOffsets.value()}};
-
-        return pangenomeGraph;
     }
 
-    __host__ PangenomeGraph* PangenomeGraph::copyToDevice() {
+    __host__ PangenomeGraph* PangenomeGraph::copyToDevice(PangenomeGraph* d_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) {
         // Check if device instance already exists for this pangenome graph
         if (d_instance) {
-            return d_instance;
+            throw ::std::runtime_error{"Device instance already exists for this Pangenome Graph!"};
         }
 
-        // Allocate device pangenome graph buffers
-        ::size_t* d_columnValues{nullptr};
-        ::size_t* d_rowOffsets{nullptr};
-        KernelUtils::cudaMalloc(&d_columnValues, numEdges * sizeof(::size_t));
-        KernelUtils::cudaMalloc(&d_rowOffsets, (numNodes + 1) * sizeof(::size_t));
+        // Get allocator
+        KernelUtils::BumpPtrAllocator* allocator{allocatorOptional};
+        KernelUtils::BumpPtrAllocator allocatorInstance{};
+        if (!allocator) {
+            allocator = &allocatorInstance;
+        }
 
-        // Copy buffers data from host to device
-        const auto d_baseValues{baseValues->copyToDevice()};
-        KernelUtils::cudaMemcpy(d_columnValues, columnValues, numEdges * sizeof(::size_t), ::cudaMemcpyHostToDevice);
-        KernelUtils::cudaMemcpy(d_rowOffsets, rowOffsets, (numNodes + 1) * sizeof(::size_t), ::cudaMemcpyHostToDevice);
+        // Grow allocator
+        if (ownsInstance) {
+            allocator->grow<PangenomeGraph>();
+            growBuffers(allocator, baseValues.getNumBases(), numEdges);
+        }
 
-        // Allocate device pangenome graph instance
-        PangenomeGraph* d_pangenomeGraph{nullptr};
-        KernelUtils::cudaMalloc(&d_pangenomeGraph, sizeof(PangenomeGraph));
+        // Initialize allocator
+        if (ownsInstance) {
+            allocator->initCudaGMem();
+        }
+
+        // Reserve instance
+        if (ownsInstance) {
+            this->d_instance = allocator->emplaceReserve<PangenomeGraph>();
+        }
+        else {
+            this->d_instance = d_instanceOptional;
+        }
+
+        // Emplace buffers
+        const auto d_baseValues{baseValues.copyToDevice(&d_instance->baseValues, allocator)};
+        const auto d_columnValues{allocator->cudaEmplaceCopy<::std::remove_pointer_t<decltype(columnValues)>>(columnValues, ::cudaMemcpyHostToDevice, numEdges, false, cudaStreamDefault)};
+        const auto d_rowOffsets{allocator->cudaEmplaceCopy<::std::remove_pointer_t<decltype(rowOffsets)>>(rowOffsets, ::cudaMemcpyHostToDevice, baseValues.getNumBases() + 1, false, cudaStreamDefault)};
 
         // Create temporary host instance holding the device pointers
-        const PangenomeGraph devicePangenomeGraph{numNodes, numEdges, d_baseValues, d_columnValues, d_rowOffsets, d_pangenomeGraph};
+        const PangenomeGraph d_pangenomeGraph{baseValues.getNumBases(), numEdges, d_baseValues, d_columnValues, d_rowOffsets, d_pangenomeGraph};
 
-        // Update host instance data
-        this->d_instance = d_pangenomeGraph;
-
-        // Copy instance data from host to device
-        KernelUtils::cudaMemcpy(d_pangenomeGraph, &devicePangenomeGraph, sizeof(PangenomeGraph), ::cudaMemcpyHostToDevice);
+        // Emplace instance
+        if (ownsInstance) {
+            *pinned_instance = d_pangenomeGraph;
+            KernelUtils::cudaMemcpyAsync(d_instance, pinned_instance, sizeof(PangenomeGraph), ::cudaMemcpyHostToDevice, cudaStreamDefault);
+        }
 
         return d_pangenomeGraph;
     }
 
-    __host__ void PangenomeGraph::free(const bool freeSequence) const {
-        // Free device memory if device instance is present
+    __host__ void PangenomeGraph::free() const {
+        // Free device memory if present
         if (d_instance) {
-            // Create a temporary host copy of the device instance to get its internal device pointers
-            PangenomeGraph devicePangenomeGraph{};
-            KernelUtils::cudaMemcpy(&devicePangenomeGraph, d_instance, sizeof(PangenomeGraph), ::cudaMemcpyDeviceToHost);
-
-            // Free device pangenome graph buffers
-            if (devicePangenomeGraph.columnValues) {
-                KernelUtils::cudaFree(const_cast<::size_t*>(devicePangenomeGraph.columnValues));
+            if (ownsInstance) {
+                KernelUtils::cudaFreeAsync(d_instance, cudaStreamDefault);
             }
-            if (devicePangenomeGraph.rowOffsets) {
-                KernelUtils::cudaFree(const_cast<::size_t*>(devicePangenomeGraph.rowOffsets));
+            else {
+                KernelUtils::cudaFreeAsync(pinned_instance->getBuffersRoot(), cudaStreamDefault);
             }
-
-            // Free device pangenome graph instance
-            KernelUtils::cudaFree(d_instance);
         }
 
         // Free host memory
-        if (baseValues && freeSequence) {
-            this->baseValues->free();
+        if (ownsInstance) {
+            KernelUtils::cudaFreeHost(pinned_instance);
         }
-        delete[] columnValues;
-        delete[] rowOffsets;
-        delete this;
+        else {
+            KernelUtils::cudaFreeHost(getBuffersRoot());
+        }
     }
-
-    __host__ __device__ ::size_t PangenomeGraph::getNumNodes() const {
-        // Get number of nodes
-        return numNodes;
-    }
-
-    __host__ __device__ ::size_t PangenomeGraph::getNumEdges() const {
-        // Get number of edges
-        return numEdges;
-    }
-
-    __host__ __device__ PackedDNASequence* PangenomeGraph::getBaseValues() const {
-        // Get base values
-        return baseValues;
-    }
-
-    __host__ __device__ DNABase PangenomeGraph::getDNABase(const ::size_t nodeIdx) const {
-        // Get base from sequence
-        const auto base{(*baseValues)[nodeIdx]};
-
-        return base;
-    }
-
-    __host__ __device__ const ::size_t *PangenomeGraph::getNeighbors(const ::size_t nodeIdx) const {
-        // Get row offset for current node
-        const auto rowOffset{rowOffsets[nodeIdx]};
-
-        // Compute address for neighbors
-        const auto neighbors{&columnValues[rowOffset]};
-
-        return neighbors;
-    }
-
-    __host__ __device__ ::size_t PangenomeGraph::getNumNeighbors(const ::size_t nodeIdx) const {
-        // Get row offsets for current node and next in the sequence
-        const auto rowOffset{rowOffsets[nodeIdx]};
-        const auto nextRowOffset{rowOffsets[nodeIdx + 1]};
-
-        // Compute number of neighbors as the difference between the two
-        const auto numNeighbors{nextRowOffset - rowOffset};
-
-        return numNeighbors;
-    }
-
-    __host__ __device__ PangenomeGraph* PangenomeGraph::getDeviceInstance() const {
-        return d_instance;
-    }
-
-    __host__ __device__ PangenomeGraph::PangenomeGraph(const ::size_t numNodes, const ::size_t numEdges, PackedDNASequence* const baseValues, const ::size_t* const columnValues, const ::size_t* const rowOffsets, PangenomeGraph* const d_instance) : numNodes(numNodes), numEdges(numEdges), baseValues(baseValues), columnValues(columnValues), rowOffsets(rowOffsets), d_instance(d_instance) {}
 } // cuSGA

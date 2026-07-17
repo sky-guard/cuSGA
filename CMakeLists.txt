@@ -19,7 +19,6 @@ FetchContent_MakeAvailable(cli11)
 add_executable(cuSGA src/main.cu
         src/PangenomeGraph.cu
         src/PangenomeGraph.cuh
-        src/DNABase.cu
         src/DNABase.cuh
         src/PackedDNASequence.cu
         src/PackedDNASequence.cuh
@@ -30,6 +29,7 @@ add_executable(cuSGA src/main.cu
         src/KernelUtils.cuh
         src/Frontier.cu
         src/Frontier.cuh
+        src/Utils.cuh
 )
 
 set_target_properties(cuSGA PROPERTIES

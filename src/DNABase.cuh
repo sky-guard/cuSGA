@@ -1,6 +1,8 @@
 #ifndef CUSGA_DNABASE_CUH
 #define CUSGA_DNABASE_CUH
 #include <cstdint>
+#include <format>
+#include <stdexcept>
 
 namespace cuSGA {
     // DNA bases related constant
@@ -19,9 +21,24 @@ namespace cuSGA {
 
     namespace DNABaseConversion {
         // Get character for a given DNA base
-        __host__ char DNABaseToChar(DNABase base);
+        __host__ __forceinline__ inline char DNABaseToChar(DNABase base) {
+            auto baseValue{static_cast<::size_t>(base)};
+            if (baseValue > NUM_BASES - 1) {
+                throw ::std::runtime_error{::std::format("Unable to convert following DNA base to character: {}", baseValue)};
+            }
+            return DNA_BASE_TO_CHAR_MAP[baseValue];
+        }
+
         // Get DNA base for a given character
-        __host__ DNABase charToDNABase(char c);
+        __host__ __forceinline__ inline DNABase charToDNABase(char c) {
+            switch (c) {
+                case 'A': return DNABase::A;
+                case 'C': return DNABase::C;
+                case 'G': return DNABase::G;
+                case 'T': return DNABase::T;
+                default: throw ::std::runtime_error{::std::format("Unable to convert following character to DNA base: {}", c)};
+            }
+        }
     } // DNABaseConversion
 } // cuSGA
 

@@ -9,141 +9,207 @@ namespace cuSGA {
         // Double buffer related constants
         static constexpr ::size_t NUM_DOUBLE_BUFFERS{2};
 
-        // Create double buffer
-        static DoubleBuffer* create(const ::size_t size) {
-            // Create double buffer instance
-            auto doubleBuffer{new DoubleBuffer(size)};
-
-            return doubleBuffer;
+        // Grow allocator using the expected buffers size
+        __host__ __device__ __forceinline__ static void growBuffers(KernelUtils::BumpPtrAllocator* const allocator, const ::size_t size) {
+            // Grow size for buffers
+            allocator->grow<T>(NUM_DOUBLE_BUFFERS * size);
         }
 
+        // Default constructor
+        DoubleBuffer() = default;
+
+        // Parameterized constructor
+        __host__ DoubleBuffer(const ::size_t size, const bool ownsInstance,  DoubleBuffer* const pinned_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* const allocatorOptional = nullptr) : DoubleBuffer(size, {nullptr}, 0, ownsInstance, pinned_instanceOptional) {
+            // Get allocator
+            KernelUtils::BumpPtrAllocator* allocator{allocatorOptional};
+            KernelUtils::BumpPtrAllocator allocatorInstance{};
+            if (!allocator) {
+                allocator = &allocatorInstance;
+            }
+
+            // Grow allocator
+            if (ownsInstance) {
+                allocator->grow<DoubleBuffer>();
+                growBuffers(allocator, size);
+            }
+
+            // Initialize allocator
+            if (ownsInstance) {
+                allocator->initHostPinnedMem();
+            }
+
+            // Emplace buffers
+            if (ownsInstance) {
+                this->pinned_instance = allocator->emplaceReserve<DoubleBuffer>();
+            }
+            const auto basePtr{allocator->emplaceReserve<T>(NUM_DOUBLE_BUFFERS * size)};
+#pragma unroll
+            for (::size_t i{0}; i < NUM_DOUBLE_BUFFERS; ++i) {
+                this->buffers[i] = basePtr + i * (size * sizeof(T));
+            }
+        }
+
+        // Copy constructor
+        DoubleBuffer(const DoubleBuffer& other) = default;
+
+        // Move constructor
+        DoubleBuffer(DoubleBuffer&& other) = default;
+
+        // Copy assignment
+        DoubleBuffer& operator=(const DoubleBuffer& other) = default;
+
+        // Move assignment
+        DoubleBuffer& operator=(DoubleBuffer&& other) = default;
+
+        // Destructor
+        ~DoubleBuffer() = default;
+
         // Move double buffer to device
-        __host__ DoubleBuffer* copyToDevice() {
+        __host__ DoubleBuffer copyToDevice(DoubleBuffer* const d_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* const allocatorOptional = nullptr) {
             // Check if device instance already exists for this double buffer
             if (d_instance) {
-                return d_instance;
+                throw ::std::runtime_error{"Device instance already exists for this Double Buffer!"};
             }
 
-            // Allocate device double buffer
+            // Get allocator
+            KernelUtils::BumpPtrAllocator* allocator{allocatorOptional};
+            KernelUtils::BumpPtrAllocator allocatorInstance{};
+            if (!allocator) {
+                allocator = &allocatorInstance;
+            }
+
+            // Grow allocator
+            if (ownsInstance) {
+                allocator->grow<DoubleBuffer>();
+                growBuffers(allocator, size);
+            }
+
+            // Initialize allocator
+            if (ownsInstance) {
+                allocator->initCudaGMem();
+            }
+
+            // Reserve instance
+            if (ownsInstance) {
+                this->d_instance = allocator->emplaceReserve<DoubleBuffer>();
+            }
+            else {
+                this->d_instance = d_instanceOptional;
+            }
+
+            // Emplace buffers
+            const auto d_buffersBase{allocator->cudaEmplaceCopy<T>(buffers[0], ::cudaMemcpyHostToDevice, NUM_DOUBLE_BUFFERS * size, false, cudaStreamDefault)};
             T* d_buffers[NUM_DOUBLE_BUFFERS]{nullptr};
-            if (size > 0) {
-                for (::size_t i{0}; i < NUM_DOUBLE_BUFFERS; ++i) {
-                    // Allocate device buffer
-                    KernelUtils::cudaMalloc(&d_buffers[i], size * sizeof(T));
-
-                    // Copy buffer data from host to device
-                    KernelUtils::cudaMemcpy(d_buffers[i], buffers[i], size * sizeof(T), ::cudaMemcpyHostToDevice);
-                }
+#pragma unroll
+            for (::size_t i{0}; i < NUM_DOUBLE_BUFFERS; ++i) {
+                this->buffers[i] = d_buffersBase + i * (size * sizeof(T));
             }
-
-            // Allocate device sequence instance
-            DoubleBuffer* d_doubleBuffer{nullptr};
-            KernelUtils::cudaMalloc(&d_doubleBuffer, sizeof(DoubleBuffer));
 
             // Create temporary host instance holding the device pointers
-            const DoubleBuffer deviceDoubleBuffer{size, d_buffers[0], d_buffers[1], d_doubleBuffer};
+            const DoubleBuffer d_doubleBuffer{size, d_buffers, selector, ownsInstance, pinned_instance, d_instance};
 
-            // Update host instance data
-            this->d_instance = d_doubleBuffer;
-
-            // Copy instance data from host to device
-            KernelUtils::cudaMemcpy(d_doubleBuffer, &deviceDoubleBuffer, sizeof(DoubleBuffer), ::cudaMemcpyHostToDevice);
+            // Emplace instance
+            if (ownsInstance) {
+                *pinned_instance = d_doubleBuffer;
+                KernelUtils::cudaMemcpyAsync(d_instance, pinned_instance, sizeof(DoubleBuffer), ::cudaMemcpyHostToDevice, cudaStreamDefault);
+            }
 
             return d_doubleBuffer;
         }
 
         // Free double buffer
         __host__ void free() const {
-            // Free device memory if device instance is present
+            // Free device memory if present
             if (d_instance) {
-                // Create a temporary host copy of the device instance to get its internal device pointers
-                DoubleBuffer deviceDoubleBuffer{};
-                KernelUtils::cudaMemcpy(&deviceDoubleBuffer, d_instance, sizeof(DoubleBuffer), ::cudaMemcpyDeviceToHost);
-
-                // Free device double buffer
-                for (auto& buffer : deviceDoubleBuffer.buffers) {
-                    if (buffer) {
-                        KernelUtils::cudaFree(buffer);
-                    }
+                if (ownsInstance) {
+                    KernelUtils::cudaFreeAsync(d_instance, cudaStreamDefault);
                 }
-
-                // Free device double buffer instance
-                KernelUtils::cudaFree(d_instance);
+                else {
+                    KernelUtils::cudaFreeAsync(pinned_instance->getBuffersRoot(), cudaStreamDefault);
+                }
             }
 
             // Free host memory
-            for (::size_t i{0}; i < NUM_DOUBLE_BUFFERS; ++i) {
-                delete[] buffers[i];
+            if (ownsInstance) {
+                KernelUtils::cudaFreeHost(pinned_instance);
             }
-            delete this;
+            else {
+                KernelUtils::cudaFreeHost(getBuffersRoot());
+            }
         }
 
         // Get size
-        __host__ __device__ ::size_t getSize() const {
+        __host__ __device__ __forceinline__ ::size_t getSize() const {
             return size;
         }
 
         // Get current buffer
-        __host__ __device__ T* current() const {
-            // Get current buffer
+        __host__ __device__ __forceinline__ T* current() const {
             return buffers[selector];
         }
 
         // Get alternate buffer
-        __host__ __device__ T* alternate() const {
-            // Get alternate buffer
+        __host__ __device__ __forceinline__ T* alternate() const {
             return buffers[selector ^ 1];
         }
 
+        // Get pinned instance
+        __host__ __device__ __forceinline__ DoubleBuffer* getPinnedInstance() const {
+            return pinned_instance;
+        }
+
         // Get device instance
-        __host__ __device__ DoubleBuffer* getDeviceInstance() const {
+        __host__ __device__ __forceinline__ DoubleBuffer* getDeviceInstance() const {
             return d_instance;
         }
 
+        // Get buffer root
+        __host__ __device__ __forceinline__ void* getBuffersRoot() const {
+            return buffers[0];
+        }
+
         // Swap buffers
-        __host__ __device__ void swap() {
+        __host__ __device__ __forceinline__ void swap() {
             this->selector ^= 1;
         }
 
         // Swap device buffers
-        __host__ void swapSync() {
+        __host__ __forceinline__ void d_swap() const {
             if (d_instance) {
-                this->d_selector ^= 1;
-                KernelUtils::cudaMemcpy(&d_instance->selector, &d_selector, sizeof(selector), ::cudaMemcpyHostToDevice);
+                // Update pinned instance
+                pinned_instance->selector ^= 1;
+
+                // Update device instance asynchronously
+                KernelUtils::cudaMemcpyAsync(&d_instance->selector, &pinned_instance->selector, sizeof(selector), ::cudaMemcpyHostToDevice, cudaStreamDefault);
             }
         }
 
         // Non-const version of subscription operator for assignment and modification
-        __host__ __device__ T& operator[](const ::size_t idx) {
+        __host__ __device__ __forceinline__ T& operator[](const ::size_t idx) {
             return buffers[selector][idx];
         }
 
         // Const version of subscription operator for read-only access
-        __host__ __device__ const T& operator[](const ::size_t idx) const {
+        __host__ __device__ __forceinline__ const T& operator[](const ::size_t idx) const {
             return buffers[selector][idx];
         }
 
     private:
         // Double buffer implementation
+        // NOTE: Uses pinned memory and linearized memory layout on the device memory
         ::size_t size{0};
         T* buffers[NUM_DOUBLE_BUFFERS]{nullptr};
         ::size_t selector{0};
-        ::size_t d_selector{0};
+        bool ownsInstance{false};
+        DoubleBuffer* pinned_instance{nullptr};
         DoubleBuffer* d_instance{nullptr};
 
-        // Default constructor
-        DoubleBuffer() = default;
-
-        // Double buffer constructor
-        __host__ __device__ explicit DoubleBuffer(const ::size_t size, T* const currentBuffer = nullptr, T* const alternateBuffer = nullptr, DoubleBuffer* const d_instance = nullptr) : size(size), buffers{currentBuffer, alternateBuffer}, d_instance(d_instance) {
-            // Allocate buffers if missing
-            if (size > 0) {
-                if (!currentBuffer) {
-                    buffers[0] = new T[size]{};
-                }
-                if (!alternateBuffer) {
-                    buffers[1] = new T[size]{};
-                }
+        // Parameterized constructor
+        __host__ __device__ __forceinline__ DoubleBuffer(const ::size_t size, T* const (& buffers)[NUM_DOUBLE_BUFFERS], const ::size_t selector, const bool ownsInstance, DoubleBuffer* const pinned_instance = nullptr, DoubleBuffer* const d_instance = nullptr) : size(size), selector(selector), ownsInstance(ownsInstance), pinned_instance(pinned_instance), d_instance(d_instance) {
+            // Set buffers
+#pragma unroll
+            for (::size_t i{0}; i < NUM_DOUBLE_BUFFERS; ++i) {
+                this->buffers[i] = buffers[i];
             }
         }
     };
