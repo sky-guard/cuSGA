@@ -6,6 +6,7 @@
 #include "PackedDNASequence.cuh"
 
 namespace cuSGA {
+    // Pangenome graph
     class PangenomeGraph {
     public:
         // Grow allocator using the expected buffers size

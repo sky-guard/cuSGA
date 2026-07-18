@@ -8,6 +8,38 @@
 #include "PangenomeGraph.cuh"
 
 namespace cuSGA {
+    // Forward declaration
+    class SequenceGraph;
+
+    // Sequence graph kernels
+    namespace SequenceGraphKernels {
+        // Initialization kernel
+        __global__ void initialize(SequenceGraph d_sequenceGraph);
+
+        // Substitutions kernel
+        __global__ void substitutions(SequenceGraph d_sequenceGraph, ::size_t layerIdx);
+
+        // Deletions kernel
+        __global__ void deletions(SequenceGraph d_sequenceGraph);
+
+        // Insertions kernel
+        __global__ void insertions(SequenceGraph d_sequenceGraph, Frontier d_frontier);
+
+        // Propagations kernel
+        __global__ void propagations(SequenceGraph d_sequenceGraph, Frontier d_frontier, ::size_t layerIdx);
+
+        // Minimum score kernel
+        inline constexpr unsigned MIN_SCORE_SHUFFLE_MASK{0xFFFFFFFF};
+        __host__ __device__ __forceinline__ inline ::size_t minScoreSMemCalculator(const ::size_t blockSize) {
+            // Get number of warps in the block
+            const auto numWarps{blockSize / KernelUtils::WARP_SIZE};
+
+            return numWarps * sizeof(::size_t);
+        }
+        __global__ void minScore(SequenceGraph d_sequenceGraph, ::size_t scoreIdx);
+    } // SequenceGraphKernels
+
+    // Sequence graph
     class SequenceGraph {
     public:
         // Alignment related constants
@@ -18,8 +50,24 @@ namespace cuSGA {
         static constexpr ::size_t SCORE_MAX_VALUE{::std::numeric_limits<::uint64_t>::max()};
 
         // Grow allocator using the expected buffers size
-        __host__ __device__ __forceinline__ static void growBuffers(KernelUtils::BumpPtrAllocator* allocator) {
-            // TODO: decide input parameters
+        __host__ __device__ __forceinline__ static void growBuffers(KernelUtils::BumpPtrAllocator* allocator, const ::size_t maxSequenceLength, const ::size_t numNodes, const ::size_t numEdges, const ::size_t totalNumConnectedComponents, const ::size_t numScores) {
+            // Grow size for sequence
+            PackedDNASequence::growBuffers(allocator, maxSequenceLength);
+
+            // Grow size for pangenome graph
+            PangenomeGraph::growBuffers(allocator, numNodes, numEdges);
+
+            // Grow size for connected components offsets
+            allocator->grow<::std::remove_pointer_t<decltype(connectedComponentsOffsets)>>(totalNumConnectedComponents);
+
+            // Grow size for connected components mappings
+            allocator->grow<::std::remove_pointer_t<decltype(connectedComponentsMappings)>>(NUM_BASES * numNodes);
+
+            // Grow size for costs double buffer
+            DoubleBuffer<::size_t>::growBuffers(allocator, numNodes);
+
+            // Grow size for scores
+            allocator->grow<::std::remove_pointer_t<decltype(scores)>>(numScores);
         }
 
         // Default constructor
@@ -78,16 +126,16 @@ namespace cuSGA {
         }
 
         // Copy back scores from device
-        __host__ __device__ __forceinline__ ::cuda::atomic<::uint64_t, ::cuda::thread_scope_device>* d_getScores() const {
+        __host__ __forceinline__ ::cuda::atomic<::uint64_t, ::cuda::thread_scope_device>* h2d_getScores() const {
             if (d_instance) {
-                KernelUtils::cudaMemcpyAsync(scores, pinned_instance->scores, numScores * sizeof(scores[0]),::cudaMemcpyDeviceToHost, cudaStreamDefault);
+                CUDA_CHECK(::cudaMemcpy(scores, pinned_instance->scores, numScores * sizeof(scores[0]),::cudaMemcpyDeviceToHost));
             }
 
             return scores;
         }
 
         // Get CUDA atomic score for a given index
-        __host__ __device__ __forceinline__ const ::cuda::atomic<::uint64_t, ::cuda::thread_scope_device>& getAtomicScore(const ::size_t idx) const {
+        __host__ __device__ __forceinline__ ::cuda::atomic<::uint64_t, ::cuda::thread_scope_device>& getAtomicScore(const ::size_t idx) const {
             return scores[idx];
         }
 
@@ -101,33 +149,101 @@ namespace cuSGA {
             return d_instance;
         }
 
+        // Get buffer root
+        __host__ __device__ __forceinline__ void* getBuffersRoot() const {
+            return sequence.getBuffersRoot();
+        }
+
         // Reset scores
-        __host__ __device__ __forceinline__ void resetScores() const {
+        __host__ __device__ __forceinline__ void initializeScores() const {
             ::memset(scores, 1, numScores * sizeof(scores[0]));
         }
 
         // Reset device scores
-        __host__ __forceinline__ void d_resetScores() const {
+        __host__ __forceinline__ void h2d_initializeScores() const {
             if (d_instance) {
-                KernelUtils::cudaMemsetAsync(pinned_instance->scores, 1, numScores * sizeof(scores[0]), cudaStreamDefault);
+                CUDA_CHECK(::cudaMemsetAsync(pinned_instance->scores, 1, numScores * sizeof(scores[0]), cudaStreamDefault));
             }
         }
 
-        // TODO: check and possibly force inline
         // Align sequence
-        __host__ ::std::vector<::uint64_t> align(const ::std::string& sequenceFileName);
-        // Perform initialization step
-        __host__ void initialize(bool sync = true) const;
-        // Perform substitutions for a given layer index
-        __host__ void substitutions(::size_t layerIdx, bool sync = true) const;
-        // Perform deletions for a given layer index
-        __host__ void deletions(::size_t layerIdx, bool sync = true) const;
-        // Perform insertions for a given layer index
-        __host__ void insertions(const Frontier& d_frontier, bool sync = true) const;
-        // Perform propagations for a given layer index
-        __host__ void propagations(const Frontier& d_frontier, ::size_t layerIdx, bool sync = true) const;
-        // Compute minimum score
-        __host__ void minScore(bool sync = true) const;
+        __host__ void align(const ::std::string& sequenceFileName);
+
+        // Launch initialize kernel
+        __host__ __forceinline__ void initialize() const {
+            // Get block size
+            const auto blockSize{KernelUtils::cudaSizeBlock<SequenceGraphKernels::initialize>()};
+
+            // Get grid size
+            const auto gridSize{KernelUtils::cudaSizeGrid(pangenomeGraph.getNumNodes(), blockSize)};
+
+            // Launch kernel
+            KernelUtils::cudaLaunchKernel<SequenceGraphKernels::initialize>(gridSize, blockSize, 0, cudaStreamDefault, *pinned_instance);
+        }
+
+        // Launch substitutions kernel
+        __host__ __forceinline__ void substitutions(const ::size_t layerIdx) const {
+            // Get block size
+            const auto blockSize{KernelUtils::cudaSizeBlock<SequenceGraphKernels::substitutions>()};
+
+            // Get grid size
+            const auto gridSize{KernelUtils::cudaSizeGrid(pangenomeGraph.getNumNodes(), blockSize)};
+
+            // Launch kernel
+            KernelUtils::cudaLaunchKernel<SequenceGraphKernels::substitutions>(gridSize, blockSize, 0, cudaStreamDefault, *pinned_instance, layerIdx);
+        }
+
+        // Launch deletions kernel
+        __host__ __forceinline__ void deletions(const ::size_t layerIdx) const {
+            // Get block size
+            const auto blockSize{KernelUtils::cudaSizeBlock<SequenceGraphKernels::deletions>()};
+
+            // Get grid size
+            const auto gridSize{KernelUtils::cudaSizeGrid(pangenomeGraph.getNumNodes(), blockSize)};
+
+            // Launch kernel
+            KernelUtils::cudaLaunchKernel<SequenceGraphKernels::deletions>(gridSize, blockSize, 0, cudaStreamDefault, *pinned_instance, layerIdx);
+        }
+
+        // Launch insertions kernel
+        __host__ __forceinline__ void insertions(const Frontier& d_frontier) const {
+            // Get block size
+            const auto blockSize{KernelUtils::cudaSizeBlock<SequenceGraphKernels::insertions>()};
+
+            // Get grid size
+            const auto gridSize{KernelUtils::cudaSizeGrid(pangenomeGraph.getNumNodes(), blockSize)};
+
+            // Launch kernel
+            KernelUtils::cudaLaunchKernel<SequenceGraphKernels::insertions>(gridSize, blockSize, 0, cudaStreamDefault, *pinned_instance, d_frontier);
+        }
+
+        // Launch propagations kernel
+        __host__ __forceinline__ void propagations(const Frontier& d_frontier, const ::size_t layerIdx) const {
+            // Get block size
+            const auto blockSize{KernelUtils::cudaSizeBlock<SequenceGraphKernels::propagations>()};
+
+            // Get grid size
+            const auto gridSize{KernelUtils::cudaSizeGrid(d_frontier.getSize(), blockSize)};
+
+            // Launch kernel
+            KernelUtils::cudaLaunchKernel<SequenceGraphKernels::propagations>(gridSize, blockSize, 0, cudaStreamDefault, *pinned_instance, d_frontier, layerIdx);
+        }
+
+        // Launch min score kernel
+        __host__ __forceinline__ void minScore(const ::size_t scoreIdx) const {
+            // Get block size and round it down to be a multiple of WARP_SIZE
+            auto blockSize{KernelUtils::cudaSizeBlockWithDynamicSMem<SequenceGraphKernels::minScore, SequenceGraphKernels::minScoreSMemCalculator>()};
+            blockSize &= ~(KernelUtils::WARP_SIZE - 1);
+
+            // Get grid size
+            const auto gridSize{KernelUtils::cudaSizeGrid(pangenomeGraph.getNumNodes(), blockSize)};
+
+            // Get dynamic shared memory size
+            const auto dynamicSMemSize{SequenceGraphKernels::minScoreSMemCalculator(blockSize)};
+
+            // Launch kernel
+            KernelUtils::cudaLaunchKernel<SequenceGraphKernels::minScore>(gridSize, blockSize, dynamicSMemSize, cudaStreamDefault, *pinned_instance, scoreIdx);
+        }
 
     private:
         // Sequence graph implementation
@@ -158,39 +274,6 @@ namespace cuSGA {
             }
         }
     };
-
-    namespace SequenceGraphKernels {
-        // Initialization kernel
-        inline constexpr ::size_t INITIALIZE_DYNAMIC_SMEM_SIZE{0};
-        inline constexpr int INITIALIZE_MAX_BLOCK_SIZE{0};
-        __global__ void initialize(SequenceGraph d_sequenceGraph);
-
-        // Substitutions kernel
-        inline constexpr ::size_t SUBSTITUTIONS_DYNAMIC_SMEM_SIZE{0};
-        inline constexpr int SUBSTITUTIONS_MAX_BLOCK_SIZE{0};
-        __global__ void substitutions(SequenceGraph d_sequenceGraph, ::size_t layerIdx);
-
-        // Deletions kernel
-        inline constexpr ::size_t DELETIONS_DYNAMIC_SMEM_SIZE{0};
-        inline constexpr int DELETIONS_MAX_BLOCK_SIZE{0};
-        __global__ void deletions(SequenceGraph d_sequenceGraph);
-
-        // Insertions kernel
-        inline constexpr ::size_t INSERTIONS_DYNAMIC_SMEM_SIZE{0};
-        inline constexpr int INSERTIONS_MAX_BLOCK_SIZE{0};
-        __global__ void insertions(SequenceGraph d_sequenceGraph, Frontier d_frontier);
-
-        // Propagations kernel
-        inline constexpr ::size_t PROPAGATIONS_DYNAMIC_SMEM_SIZE{0};
-        inline constexpr int PROPAGATIONS_MAX_BLOCK_SIZE{0};
-        __global__ void propagations(SequenceGraph d_sequenceGraph, Frontier d_frontier, ::size_t layerIdx);
-
-        // Minimum score kernel
-        inline constexpr ::size_t MIN_SCORE_DYNAMIC_SMEM_SIZE{0};
-        inline constexpr int MIN_SCORE_MAX_BLOCK_SIZE{0};
-        inline constexpr unsigned MIN_SCORE_SHUFFLE_MASK{0xFFFFFFFF};
-        __global__ void minScore(SequenceGraph d_sequenceGraph);
-    } // SequenceGraphKernels
 } // cuSGA
 
 #endif //CUSGA_SEQUENCEGRAPH_CUH

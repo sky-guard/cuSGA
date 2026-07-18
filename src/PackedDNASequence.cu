@@ -147,7 +147,7 @@ namespace cuSGA {
         // Emplace instance
         if (ownsInstance) {
             *pinned_instance = d_sequence;
-            KernelUtils::cudaMemcpyAsync(d_instance, pinned_instance, sizeof(PackedDNASequence), ::cudaMemcpyHostToDevice, cudaStreamDefault);
+            CUDA_CHECK(::cudaMemcpyAsync(d_instance, pinned_instance, sizeof(PackedDNASequence), ::cudaMemcpyHostToDevice, cudaStreamDefault));
         }
 
         return d_sequence;
@@ -157,19 +157,19 @@ namespace cuSGA {
         // Free device memory if present
         if (d_instance) {
             if (ownsInstance) {
-                KernelUtils::cudaFreeAsync(d_instance, cudaStreamDefault);
+                CUDA_CHECK(::cudaFreeAsync(d_instance, cudaStreamDefault));
             }
             else {
-                KernelUtils::cudaFreeAsync(getBuffersRoot(), cudaStreamDefault);
+                CUDA_CHECK(::cudaFreeAsync(getBuffersRoot(), cudaStreamDefault));
             }
         }
 
         // Free host memory
         if (ownsInstance) {
-            KernelUtils::cudaFreeHost(pinned_instance);
+            CUDA_CHECK(::cudaFreeHost(pinned_instance));
         }
         else {
-            KernelUtils::cudaFreeHost(getBuffersRoot());
+            CUDA_CHECK(::cudaFreeHost(getBuffersRoot()));
         }
     }
 
@@ -217,10 +217,10 @@ namespace cuSGA {
 
             // Update device buffer
             const auto newNumChunks{(numBases + PACKING_FACTOR - 1) / PACKING_FACTOR};
-            KernelUtils::cudaMemcpyAsync(pinned_instance->bases, bases, newNumChunks * sizeof(bases[0]), ::cudaMemcpyHostToDevice, cudaStreamDefault);
+            CUDA_CHECK(::cudaMemcpyAsync(pinned_instance->bases, bases, newNumChunks * sizeof(bases[0]), ::cudaMemcpyHostToDevice, cudaStreamDefault));
 
             // Update device instance
-            KernelUtils::cudaMemcpyAsync(d_instance, pinned_instance, sizeof(PackedDNASequence), ::cudaMemcpyHostToDevice, cudaStreamDefault);
+            CUDA_CHECK(::cudaMemcpyAsync(d_instance, pinned_instance, sizeof(PackedDNASequence), ::cudaMemcpyHostToDevice, cudaStreamDefault));
         }
 
         return true;

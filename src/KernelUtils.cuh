@@ -1,147 +1,72 @@
 #ifndef CUSGA_KERNELUTILS_CUH
 #define CUSGA_KERNELUTILS_CUH
-#include <format>
-#include <source_location>
-#include <stdexcept>
 
 namespace cuSGA::KernelUtils {
     // Kernel Utils related constants
     inline constexpr ::size_t WARP_SIZE{32};
     inline constexpr ::size_t MAX_WARPS_PER_BLOCK{32};
+    inline constexpr ::size_t WARP_SHIFT{::std::countr_zero(WARP_SIZE)};
 
-    // cudaGetLastError() wrapper
-    __forceinline__ inline void cudaCheckLastError(const ::std::source_location location = ::std::source_location::current()) {
-        // Get last CUDA error and throw exception if error occurred
-        if (const auto cudaError{::cudaGetLastError()}; cudaError != ::cudaSuccess) {
-            throw ::std::runtime_error{::std::format("CUDA ERROR [{} -> {}:{}]: {}", location.file_name(), location.function_name(), location.line(), ::cudaGetErrorString(cudaError))};
+    // CUDA_CHECK macro
+#ifndef NDEBUG
+    // In Debug mode, check for CUDA errors
+#define CUDA_CHECK(result) ::cuSGA::KernelUtils::cudaCheck((result), __FILE__, __LINE__)
+
+    // CUDA_CHECK helper
+    __host__ __device__ __forceinline__ inline void cudaCheck(const ::cudaError_t result, const char* const file, const ::size_t line) {
+        if (result != ::cudaSuccess) {
+            ::printf("CUDA Error at %s:%llu\n%s\n", file, line, ::cudaGetErrorString(result));
         }
     }
+#else
+    // In Release mode, do nothing
+#define CUDA_CHECK(result) (result)
+#endif
 
-    // cudaDeviceSynchronize() wrapper
-    __forceinline__ inline void cudaDeviceSynchronize() {
-        // Forward call
-        ::cudaDeviceSynchronize();
-
-        // Check for errors
-        cudaCheckLastError();
-    }
-
-    // cudaMalloc() wrapper
-    template <typename T>
-    __forceinline__ void cudaMalloc(T** const d_ptr, const ::size_t size) {
-        // Forward call
-        ::cudaMalloc(d_ptr, size);
-
-        // Check for errors
-        cudaCheckLastError();
-    }
-
-    template <typename T>
-    __forceinline__ void cudaMallocAsync(T** const d_ptr, const ::size_t size, const cudaStream_t& stream = cudaStreamDefault) {
-        // Forward call
-        ::cudaMallocAsync(d_ptr, size, stream);
-
-        // Check for errors
-        cudaCheckLastError();
-    }
-
-    // cudaMallocHost() wrapper
-    template <typename T>
-    __forceinline__ void cudaMallocHost(T** const d_ptr, const ::size_t size) {
-        // Forward call
-        ::cudaMallocHost(d_ptr, size);
-
-        // Check for errors
-        cudaCheckLastError();
-    }
-
-    // cudaFree() wrapper
-    __forceinline__ inline void cudaFree(void* const d_ptr) {
-        // Forward call
-        ::cudaFree(d_ptr);
-
-        // Check for errors
-        cudaCheckLastError();
-    }
-
-    // cudaFreeAsync() wrapper
-    __forceinline__ inline void cudaFreeAsync(void* const d_ptr, const cudaStream_t& stream = cudaStreamDefault) {
-        // Forward call
-        ::cudaFreeAsync(d_ptr, stream);
-
-        // Check for errors
-        cudaCheckLastError();
-    }
-
-    // cudaFreeHost() wrapper
-    __forceinline__ inline void cudaFreeHost(void* const pinned_ptr) {
-        // Forward call
-        ::cudaFreeHost(pinned_ptr);
-
-        // Check for errors
-        cudaCheckLastError();
-    }
-
-    // cudaMemcpy() wrapper
-    __forceinline__ inline void cudaMemcpy(void* const dst, const void* const src, const ::size_t count, const ::cudaMemcpyKind kind) {
-        // Forward call
-        ::cudaMemcpy(dst, src, count, kind);
-
-        // Check for errors
-        cudaCheckLastError();
-    }
-
-    // cudaMemcpyAsync() wrapper
-    __forceinline__ inline void cudaMemcpyAsync(void* const dst, const void* const src, const ::size_t count, const ::cudaMemcpyKind kind, const ::cudaStream_t& stream = cudaStreamDefault) {
-        // Forward call
-        ::cudaMemcpyAsync(dst, src, count, kind, stream);
-
-        // Check for errors
-        cudaCheckLastError();
-    }
-
-    // cudaMemset() wrapper
-    __forceinline__ inline void cudaMemset(void* const d_ptr, const int value, const ::size_t count) {
-        // Forward call
-        ::cudaMemset(d_ptr, value, count);
-
-        // Check for errors
-        cudaCheckLastError();
-    }
-
-    // cudaMemsetAsync() wrapper
-    __forceinline__ inline void cudaMemsetAsync(void* const d_ptr, const int value, const ::size_t count, const ::cudaStream_t& stream = cudaStreamDefault) {
-        // Forward call
-        ::cudaMemsetAsync(d_ptr, value, count, stream);
-
-        // Check for errors
-        cudaCheckLastError();
-    }
-
-    // cudaLaunchKernel wrapper
-    template <auto Kernel, typename... Args>
-    __forceinline__ void cudaLaunchKernel(const ::size_t dynamicSMemSize, const int maxBlockSize, const ::size_t numElements, const bool sync, Args&&... args) {
+    // Size block helper
+    template <const auto Kernel, const ::size_t dynamicSMemSize = 0, const ::size_t blockSizeLimit = 0>
+    __host__ __device__ __forceinline__ ::size_t cudaSizeBlock() {
         // Compute optimal block size if necessary
-        static auto minGridSize{0}, blockSize{0};
+        static ::size_t blockSize{0};
         if (blockSize == 0) {
-            ::cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, Kernel, dynamicSMemSize, maxBlockSize);
-            cudaCheckLastError();
+            // Forward call
+            ::size_t minGridSize{0};
+            CUDA_CHECK(::cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, Kernel, dynamicSMemSize, blockSizeLimit));
         }
 
-        // Size grid
-        const auto gridSize{(numElements + blockSize - 1) / blockSize};
-
-        // Launch kernel
-        Kernel<<<gridSize, blockSize, dynamicSMemSize>>>(::std::forward<Args>(args)...);
-        cudaCheckLastError();
-
-        // Synchronize with device if necessary
-        if (sync) {
-            ::cudaDeviceSynchronize();
-            cudaCheckLastError();
-        }
+        return blockSize;
     }
 
+    // Size block helper
+    template <const auto Kernel, const auto blockSizeToDynamicSMemSize, const ::size_t blockSizeLimit = 0>
+    __host__ __device__ __forceinline__ ::size_t cudaSizeBlockWithDynamicSMem() {
+        // Compute optimal block size if necessary
+        static ::size_t blockSize{0};
+        if (blockSize == 0) {
+            // Forward call
+            ::size_t minGridSize{0};
+            CUDA_CHECK(::cudaOccupancyMaxPotentialBlockSizeVariableSMem(&minGridSize, &blockSize, Kernel, blockSizeToDynamicSMemSize, blockSizeLimit));
+        }
+
+        return blockSize;
+    }
+
+    // Size grid helper
+    __host__ __device__ __forceinline__ ::size_t cudaSizeGrid(const ::size_t numElements, const ::size_t blockSize) {
+        return (numElements + blockSize - 1) / blockSize;
+    }
+
+    // Kernel helper
+    template <const auto Kernel, typename... Args>
+    __host__ __device__ __forceinline__ void cudaLaunchKernel(const ::size_t gridSize, const ::size_t blockSize, const ::size_t dynamicSMemSize, const cudaStream_t& stream, Args&&... args) {
+        // Launch kernel
+        Kernel<<<gridSize, blockSize, dynamicSMemSize, stream>>>(::std::forward<Args>(args)...);
+
+        // Check for errors
+        CUDA_CHECK(::cudaGetLastError());
+    }
+
+    // Bump pointer allocator
     class BumpPtrAllocator {
     public:
         // Default constructor
@@ -313,10 +238,10 @@ namespace cuSGA::KernelUtils {
 
             // Copy memory
             if (sync) {
-                cudaMemcpy(reserved, src, totalSize, kind);
+                CUDA_CHECK(cudaMemcpy(reserved, src, totalSize, kind));
             }
             else {
-                cudaMemcpyAsync(reserved, src, totalSize, kind, stream);
+                CUDA_CHECK(cudaMemcpyAsync(reserved, src, totalSize, kind, stream));
             }
 
             return reserved;
@@ -338,10 +263,10 @@ namespace cuSGA::KernelUtils {
 
             // Set memory
             if (sync) {
-                cudaMemset(reserved, value, totalSize);
+                CUDA_CHECK(cudaMemset(reserved, value, totalSize));
             }
             else {
-                cudaMemsetAsync(reserved, value, totalSize, stream);
+                CUDA_CHECK(cudaMemsetAsync(reserved, value, totalSize, stream));
             }
 
             return reserved;
@@ -357,7 +282,7 @@ namespace cuSGA::KernelUtils {
         __host__ __forceinline__ void initHostPinnedMem() {
             // Cuda malloc host
             void* pinned_ptr{nullptr};
-            cudaMallocHost(&pinned_ptr, size);
+            CUDA_CHECK(::cudaMallocHost(&pinned_ptr, size));
 
             // Set pointer
             this->ptr = reinterpret_cast<::uintptr_t>(pinned_ptr);
@@ -367,7 +292,7 @@ namespace cuSGA::KernelUtils {
         __host__ __device__ __forceinline__ void initCudaGMem() {
             // Cuda malloc memory
             void* d_ptr{nullptr};
-            cudaMalloc(&d_ptr, size);
+            CUDA_CHECK(::cudaMalloc(&d_ptr, size));
 
             // Set pointer
             this->ptr = reinterpret_cast<::uintptr_t>(d_ptr);
@@ -377,7 +302,7 @@ namespace cuSGA::KernelUtils {
         __host__ __device__ __forceinline__ void initCudaGMemAsync(const cudaStream_t& stream = cudaStreamDefault) {
             // Cuda malloc memory
             void* d_ptr{nullptr};
-            cudaMallocAsync(&d_ptr, size, stream);
+            CUDA_CHECK(::cudaMallocAsync(&d_ptr, size, stream));
 
             // Set pointer
             this->ptr = reinterpret_cast<::uintptr_t>(d_ptr);

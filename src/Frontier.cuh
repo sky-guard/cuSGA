@@ -5,6 +5,7 @@
 #include "DoubleBuffer.cuh"
 
 namespace cuSGA {
+    // Frontier
     class Frontier {
     public:
         // Grow allocator using the expected buffers size
@@ -52,10 +53,10 @@ namespace cuSGA {
         }
 
         // Check if device frontier is empty
-        __host__ __forceinline__ bool d_isEmpty() const {
+        __host__ __forceinline__ bool h2d_isEmpty() const {
             // Copy back current size from device
             if (d_instance) {
-                KernelUtils::cudaMemcpy(&pinned_instance->currentSize, &d_instance->currentSize, sizeof(currentSize), ::cudaMemcpyDeviceToHost);
+                CUDA_CHECK(::cudaMemcpy(&pinned_instance->currentSize, &d_instance->currentSize, sizeof(currentSize), ::cudaMemcpyDeviceToHost));
             }
 
             return pinned_instance->currentSize == 0;
@@ -86,6 +87,33 @@ namespace cuSGA {
             this->currentSize = size;
         }
 
+        // Set device frontier size
+        __host__ __forceinline__ void h2d_setSize(const ::size_t size) const {
+            pinned_instance->currentSize = size;
+            CUDA_CHECK(::cudaMemcpyAsync(&d_instance->currentSize, &pinned_instance->currentSize, sizeof(currentSize), ::cudaMemcpyHostToDevice, cudaStreamDefault));
+        }
+
+        // Set device frontier size
+        __device__ __forceinline__ void d2d_setSize(const ::size_t size) const {
+            pinned_instance->currentSize = size;
+        }
+
+        // Grow frontier queue size
+        __host__ __device__ __forceinline__ void growQueueSize() {
+            this->alternateSize += 1;
+        }
+
+        // Grow device frontier queue size
+        __host__ __forceinline__ void h2d_growQueueSize() const {
+            pinned_instance->alternateSize += 1;
+            CUDA_CHECK(::cudaMemcpyAsync(&d_instance->alternateSize, &pinned_instance->alternateSize, sizeof(alternateSize), ::cudaMemcpyHostToDevice, cudaStreamDefault));
+        }
+
+        // Grow device frontier queue size
+        __device__ __forceinline__ void d2d_growQueueSize() const {
+            d_instance->alternateSize += 1;
+        }
+
         // Insert a node into the current frontier without queueing
         __host__ __device__ __forceinline__ void insertWithoutQueueing(const ::size_t nodeIdx) const {
             doubleBuffer.current()[nodeIdx] = nodeIdx;
@@ -103,6 +131,18 @@ namespace cuSGA {
             }
         }
 
+        // Atomically insert a given node into the queue and grow its size
+        __device__ __forceinline__ void d2d_atomicInsertAndGrow(const ::size_t nodeIdx) const {
+            // Insert atomically in queue
+            if (const auto wasInQueue{isInQueue[nodeIdx].exchange(true, ::cuda::memory_order_relaxed)}; !wasInQueue) {
+                // Insert node into next frontier
+                doubleBuffer.alternate()[alternateSize] = nodeIdx;
+
+                // Grow queue size
+                d_instance->alternateSize += 1;
+            }
+        }
+
         // Swap from queue to next frontier
         __host__ __device__ __forceinline__ void swapToQueue() {
             // Swap buffers
@@ -117,20 +157,20 @@ namespace cuSGA {
         }
 
         // Swap from device queue to next device frontier
-        __host__ __forceinline__ void d_swapToQueue() const {
+        __host__ __forceinline__ void h2d_swapToQueue() const {
             if (d_instance) {
                 // Swap buffers
-                doubleBuffer.d_swap();
+                doubleBuffer.h2d_swap();
 
                 // Swap sizes
                 pinned_instance->currentSize = pinned_instance->alternateSize;
                 pinned_instance->alternateSize = 0;
 
                 // Clear isInQueue
-                KernelUtils::cudaMemsetAsync(pinned_instance->isInQueue, false, doubleBuffer.getSize() * sizeof(isInQueue[0]), cudaStreamDefault);
+                CUDA_CHECK(::cudaMemsetAsync(pinned_instance->isInQueue, false, doubleBuffer.getSize() * sizeof(isInQueue[0]), cudaStreamDefault));
 
                 // Update device instance
-                KernelUtils::cudaMemcpyAsync(d_instance, pinned_instance, sizeof(Frontier), ::cudaMemcpyHostToDevice, cudaStreamDefault);
+                CUDA_CHECK(::cudaMemcpyAsync(d_instance, pinned_instance, sizeof(Frontier), ::cudaMemcpyHostToDevice, cudaStreamDefault));
             }
         }
 
@@ -145,17 +185,17 @@ namespace cuSGA {
         }
 
         // Empty device frontier
-        __host__ __forceinline__ void d_empty() const {
+        __host__ __forceinline__ void h2d_empty() const {
             if (d_instance) {
                 // Clear (virtually) the device buffers
                 pinned_instance->currentSize = 0;
                 pinned_instance->alternateSize = 0;
 
                 // Clear isInQueue
-                KernelUtils::cudaMemsetAsync(pinned_instance->isInQueue, 0, doubleBuffer.getSize() * sizeof(isInQueue[0]), cudaStreamDefault);
+                CUDA_CHECK(::cudaMemsetAsync(pinned_instance->isInQueue, 0, doubleBuffer.getSize() * sizeof(isInQueue[0]), cudaStreamDefault));
 
                 // Update device instance
-                KernelUtils::cudaMemcpyAsync(d_instance, pinned_instance, sizeof(Frontier), ::cudaMemcpyHostToDevice, cudaStreamDefault);
+                CUDA_CHECK(::cudaMemcpyAsync(d_instance, pinned_instance, sizeof(Frontier), ::cudaMemcpyHostToDevice, cudaStreamDefault));
             }
         }
 

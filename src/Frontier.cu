@@ -70,7 +70,7 @@ namespace cuSGA {
         // Emplace instance
         if (ownsInstance) {
             *pinned_instance = d_frontier;
-            KernelUtils::cudaMemcpyAsync(d_instance, pinned_instance, sizeof(Frontier), ::cudaMemcpyHostToDevice, cudaStreamDefault);
+            CUDA_CHECK(::cudaMemcpyAsync(d_instance, pinned_instance, sizeof(Frontier), ::cudaMemcpyHostToDevice, cudaStreamDefault));
         }
 
         return d_frontier;
@@ -80,19 +80,19 @@ namespace cuSGA {
         // Free device memory if present
         if (d_instance) {
             if (ownsInstance) {
-                KernelUtils::cudaFreeAsync(d_instance, cudaStreamDefault);
+                CUDA_CHECK(::cudaFreeAsync(d_instance, cudaStreamDefault));
             }
             else {
-                KernelUtils::cudaFreeAsync(pinned_instance->getBuffersRoot(), cudaStreamDefault);
+                CUDA_CHECK(::cudaFreeAsync(pinned_instance->getBuffersRoot(), cudaStreamDefault));
             }
         }
 
         // Free host memory
         if (ownsInstance) {
-            KernelUtils::cudaFreeHost(pinned_instance);
+            CUDA_CHECK(::cudaFreeHost(pinned_instance));
         }
         else {
-            KernelUtils::cudaFreeHost(getBuffersRoot());
+            CUDA_CHECK(::cudaFreeHost(getBuffersRoot()));
         }
     }
 } //cuSGA

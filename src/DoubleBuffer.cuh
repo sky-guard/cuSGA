@@ -3,6 +3,7 @@
 #include "KernelUtils.cuh"
 
 namespace cuSGA {
+    // Double buffer
     template <typename T>
     class DoubleBuffer {
     public:
@@ -111,7 +112,7 @@ namespace cuSGA {
             // Emplace instance
             if (ownsInstance) {
                 *pinned_instance = d_doubleBuffer;
-                KernelUtils::cudaMemcpyAsync(d_instance, pinned_instance, sizeof(DoubleBuffer), ::cudaMemcpyHostToDevice, cudaStreamDefault);
+                CUDA_CHECK(::cudaMemcpyAsync(d_instance, pinned_instance, sizeof(DoubleBuffer), ::cudaMemcpyHostToDevice, cudaStreamDefault));
             }
 
             return d_doubleBuffer;
@@ -122,19 +123,19 @@ namespace cuSGA {
             // Free device memory if present
             if (d_instance) {
                 if (ownsInstance) {
-                    KernelUtils::cudaFreeAsync(d_instance, cudaStreamDefault);
+                    CUDA_CHECK(::cudaFreeAsync(d_instance, cudaStreamDefault));
                 }
                 else {
-                    KernelUtils::cudaFreeAsync(pinned_instance->getBuffersRoot(), cudaStreamDefault);
+                    CUDA_CHECK(::cudaFreeAsync(pinned_instance->getBuffersRoot(), cudaStreamDefault));
                 }
             }
 
             // Free host memory
             if (ownsInstance) {
-                KernelUtils::cudaFreeHost(pinned_instance);
+                CUDA_CHECK(::cudaFreeHost(pinned_instance));
             }
             else {
-                KernelUtils::cudaFreeHost(getBuffersRoot());
+                CUDA_CHECK(::cudaFreeHost(getBuffersRoot()));
             }
         }
 
@@ -174,13 +175,13 @@ namespace cuSGA {
         }
 
         // Swap device buffers
-        __host__ __forceinline__ void d_swap() const {
+        __host__ __forceinline__ void h2d_swap() const {
             if (d_instance) {
                 // Update pinned instance
                 pinned_instance->selector ^= 1;
 
                 // Update device instance asynchronously
-                KernelUtils::cudaMemcpyAsync(&d_instance->selector, &pinned_instance->selector, sizeof(selector), ::cudaMemcpyHostToDevice, cudaStreamDefault);
+                CUDA_CHECK(::cudaMemcpyAsync(&d_instance->selector, &pinned_instance->selector, sizeof(selector), ::cudaMemcpyHostToDevice, cudaStreamDefault));
             }
         }
 

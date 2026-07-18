@@ -9,6 +9,7 @@
 #include "Utils.cuh"
 
 namespace cuSGA {
+    // Packed DNA sequence
     class PackedDNASequence {
     public:
         // Define packing type

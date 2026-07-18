@@ -167,7 +167,7 @@ namespace cuSGA {
             initialize(false);
 
             // Swap costs double buffer for the next layer
-            costsDoubleBuffer->d_swap();
+            costsDoubleBuffer->h2d_swap();
 
             // Solve alignment layer by layer
             for (::size_t layerIdx{1}; layerIdx < sequence->getNumBases(); ++layerIdx) {
@@ -186,7 +186,7 @@ namespace cuSGA {
                     propagations(layerIdx, frontier, false);
 
                     // Swap costs double buffer for the next layer
-                    costsDoubleBuffer->d_swap();
+                    costsDoubleBuffer->h2d_swap();
                 }
             }
 
@@ -209,212 +209,126 @@ namespace cuSGA {
         return scores;
     }
 
-    __host__ void SequenceGraph::initialize(const bool sync) const {
-        // Launch initialize kernel
-        KernelUtils::cudaLaunchKernel<SequenceGraphKernels::initialize>(SequenceGraphKernels::INITIALIZE_DYNAMIC_SMEM_SIZE, SequenceGraphKernels::INITIALIZE_DYNAMIC_SMEM_SIZE, pangenomeGraph.getNumNodes(), sync, *pinned_instance);
-    }
-
-    __host__ void SequenceGraph::substitutions(const ::size_t layerIdx, const bool sync) const {
-        // Launch substitutions kernel
-        KernelUtils::cudaLaunchKernel<SequenceGraphKernels::substitutions>(SequenceGraphKernels::SUBSTITUTIONS_DYNAMIC_SMEM_SIZE, SequenceGraphKernels::SUBSTITUTIONS_MAX_BLOCK_SIZE, pangenomeGraph.getNumNodes(), sync, *pinned_instance, layerIdx);
-    }
-
-    __host__ void SequenceGraph::deletions(const ::size_t layerIdx, const bool sync) const {
-        // Launch deletions kernel
-        KernelUtils::cudaLaunchKernel<SequenceGraphKernels::deletions>(SequenceGraphKernels::DELETIONS_DYNAMIC_SMEM_SIZE, SequenceGraphKernels::DELETIONS_MAX_BLOCK_SIZE, pangenomeGraph.getNumNodes(), sync, *pinned_instance, layerIdx);
-    }
-
-    __host__ void SequenceGraph::insertions(const Frontier& d_frontier, const bool sync) const {
-        // Launch insertions kernel
-        KernelUtils::cudaLaunchKernel<SequenceGraphKernels::insertions>(SequenceGraphKernels::INSERTIONS_DYNAMIC_SMEM_SIZE, SequenceGraphKernels::INSERTIONS_MAX_BLOCK_SIZE, pangenomeGraph.getNumNodes(), sync, *pinned_instance, d_frontier);
-    }
-
-    __host__ void SequenceGraph::propagations(const Frontier& d_frontier, const ::size_t layerIdx, const bool sync) const {
-        // Launch propagations kernel
-        KernelUtils::cudaLaunchKernel<SequenceGraphKernels::propagations>(SequenceGraphKernels::PROPAGATIONS_DYNAMIC_SMEM_SIZE, SequenceGraphKernels::PROPAGATIONS_MAX_BLOCK_SIZE, d_frontier.getSize(), sync, *pinned_instance, d_frontier, layerIdx);
-    }
-
-    __host__ void SequenceGraph::minScore(const bool sync) const {
-        // Launch min score kernel
-        KernelUtils::cudaLaunchKernel<SequenceGraphKernels::minScore>(SequenceGraphKernels::MIN_SCORE_DYNAMIC_SMEM_SIZE, SequenceGraphKernels::MIN_SCORE_MAX_BLOCK_SIZE, pangenomeGraph.getNumNodes(), sync, *pinned_instance);
-    }
-
     __global__ void SequenceGraphKernels::initialize(const SequenceGraph d_sequenceGraph) { // NOLINT
-        // Get thread node index
-        const auto nodeIdx{::blockIdx.x * ::blockDim.x + ::threadIdx.x};
-
-        // Get pangenome graph
-        const auto pangenomeGraph{d_sequenceGraph.getPangenomeGraph()};
-
-        // Check for thread overflow
-        if (const auto numNodes{pangenomeGraph->getNumNodes()}; nodeIdx < numNodes) {
-            // Get costs double buffer
-            const auto costsDoubleBuffer{d_sequenceGraph.getCostsDoubleBuffer()};
-
+        // Get thread node index and check for thread overflow
+        if (const auto nodeIdx{::blockIdx.x * ::blockDim.x + ::threadIdx.x}; nodeIdx < d_sequenceGraph.getPangenomeGraph().getNumNodes()) {
             // Get current DNA base in the sequence
-            const auto sequence{d_sequenceGraph.getSequence()};
-            const auto currentBase{sequence[0]};
+            const auto sequenceBase{d_sequenceGraph.getSequence()[0]};
 
-            // Check if match
-            const auto isMatch{pangenomeGraph->getDNABase(nodeIdx) == currentBase};
+            // Get DNA base for the current node
+            const auto nodeBase{d_sequenceGraph.getPangenomeGraph().getDNABase(nodeIdx)};
 
             // Compute updated node cost
-            const auto updatedCost{(isMatch)? 0 : SequenceGraph::INITIALIZATION_COST};
+            const auto initialNodeCost{(sequenceBase == nodeBase)? 0 : SequenceGraph::INITIALIZATION_COST};
 
             // Initialize node cost for the next layer
-            costsDoubleBuffer->current()[nodeIdx].store(updatedCost, ::cuda::memory_order_relaxed);
+            d_sequenceGraph.getCostsDoubleBuffer().current()[nodeIdx].store(initialNodeCost, ::cuda::memory_order_relaxed);
         }
     }
 
     __global__ void SequenceGraphKernels::substitutions(const SequenceGraph d_sequenceGraph, const ::size_t layerIdx) { // NOLINT
-        // Get thread node index
-        const auto nodeIdx{::blockIdx.x * ::blockDim.x + ::threadIdx.x};
-
-        // Get pangenome graph
-        const auto pangenomeGraph{d_sequenceGraph.getPangenomeGraph()};
-
-        // Check for thread overflow
-        if (const auto numNodes{pangenomeGraph->getNumNodes()}; nodeIdx < numNodes) {
-            // Get costs double buffer
-            const auto costsDoubleBuffer{d_sequenceGraph.getCostsDoubleBuffer()};
-
-            // Get neighbors
-            const auto neighbors{pangenomeGraph->getNeighbors(nodeIdx)};
-            const auto numNeighbors{pangenomeGraph->getNumNeighbors(nodeIdx)};
+        // Get thread node index and check for thread overflow
+        if (const auto nodeIdx{::blockIdx.x * ::blockDim.x + ::threadIdx.x}; nodeIdx < d_sequenceGraph.getPangenomeGraph().getNumNodes()) {
+            // Get current DNA base in the sequence
+            const auto sequenceBase{d_sequenceGraph.getSequence()[layerIdx]};
 
             // Get node cost in the previous layer
-            const auto previousLayerCost{costsDoubleBuffer->alternate()[nodeIdx].load(::cuda::memory_order_relaxed)};
-
-            // Get current DNA base in the sequence
-            const auto sequence{d_sequenceGraph.getSequence()};
-            const auto currentBase{(*sequence)[layerIdx]};
+            const auto previousLayerNodeCost{d_sequenceGraph.getCostsDoubleBuffer().alternate()[nodeIdx].load(::cuda::memory_order_relaxed)};
 
             // Loop over all neighbors
+            const auto neighbors{d_sequenceGraph.getPangenomeGraph().getNeighbors(nodeIdx)};
+            const auto numNeighbors{d_sequenceGraph.getPangenomeGraph().getNumNeighbors(nodeIdx)};
             for (::size_t neighborOffset{0}; neighborOffset < numNeighbors; ++neighborOffset) {
                 // Get neighbor index
                 const auto neighborIdx{neighbors[neighborOffset]};
 
+                // Get DNA base for the neighbor
+                const auto neighborBase{d_sequenceGraph.getPangenomeGraph().getDNABase(neighborIdx)};
+
                 // Get node cost in the current layer
-                const auto currentLayerCost{costsDoubleBuffer->current()[neighborIdx].load(::cuda::memory_order_relaxed)};
+                const auto currentLayerNeighborCost{d_sequenceGraph.getCostsDoubleBuffer().current()[neighborIdx].load(::cuda::memory_order_relaxed)};
 
                 // Compute updated node cost and check for improvement
-                const auto isMatch{pangenomeGraph->getDNABase(neighborIdx) == currentBase};
-                if (const auto updatedCost{(isMatch)? previousLayerCost : previousLayerCost + SequenceGraph::SUBSTITUTION_COST}; updatedCost < currentLayerCost) {
+                if (const auto updatedCurrentLayerNeighborCost{(sequenceBase == neighborBase)? previousLayerNodeCost : previousLayerNodeCost + SequenceGraph::SUBSTITUTION_COST}; updatedCurrentLayerNeighborCost < currentLayerNeighborCost) {
                     // Set cost to atomic min
-                    costsDoubleBuffer->current()[neighborIdx].fetch_min(updatedCost);
+                    d_sequenceGraph.getCostsDoubleBuffer().current()[neighborIdx].fetch_min(updatedCurrentLayerNeighborCost);
                 }
             }
         }
     }
 
     __global__ void SequenceGraphKernels::deletions(const SequenceGraph d_sequenceGraph) { // NOLINT
-        // Get thread node index
-        const auto nodeIdx{::blockIdx.x * ::blockDim.x + ::threadIdx.x};
-
-        // Get pangenome graph
-        const auto pangenomeGraph{d_sequenceGraph.getPangenomeGraph()};
-
-        // Check for thread overflow
-        if (const auto numNodes{pangenomeGraph->getNumNodes()}; nodeIdx < numNodes) {
-            // Get costs double buffer
-            const auto costsDoubleBuffer{d_sequenceGraph.getCostsDoubleBuffer()};
-
+        // Get thread node index and check for thread overflow
+        if (const auto nodeIdx{::blockIdx.x * ::blockDim.x + ::threadIdx.x}; nodeIdx < d_sequenceGraph.getPangenomeGraph().getNumNodes()) {
             // Get node cost in the previous layer
-            const auto previousLayerCost{costsDoubleBuffer->alternate()[nodeIdx].load(::cuda::memory_order_relaxed)};
+            const auto previousLayerNodeCost{d_sequenceGraph.getCostsDoubleBuffer().alternate()[nodeIdx].load(::cuda::memory_order_relaxed)};
 
             // Compute updated node cost
-            const auto updatedCost{previousLayerCost + SequenceGraph::DELETION_COST};
+            const auto currentLayerNodeCost{previousLayerNodeCost + SequenceGraph::DELETION_COST};
 
             // Initialize node cost for the next layer
-            costsDoubleBuffer->current()[nodeIdx].store(updatedCost, ::cuda::memory_order_relaxed);
+            d_sequenceGraph.getCostsDoubleBuffer().current()[nodeIdx].store(currentLayerNodeCost, ::cuda::memory_order_relaxed);
         }
     }
 
     __global__ void SequenceGraphKernels::insertions(const SequenceGraph d_sequenceGraph, const Frontier d_frontier) { // NOLINT
-        // Get thread node index
-        const auto nodeIdx{::blockIdx.x * ::blockDim.x + ::threadIdx.x};
-
-        // Check for thread overflow
-        if (const auto numNodes{d_sequenceGraph.getPangenomeGraph()->getNumNodes()}; nodeIdx < numNodes) {
-            // Insert node in the frontier without queueing
-            d_frontier.insertWithoutQueueing(nodeIdx);
-
+        // Get thread node index and check for thread overflow
+        if (const auto nodeIdx{::blockIdx.x * ::blockDim.x + ::threadIdx.x}; nodeIdx < d_sequenceGraph.getPangenomeGraph().getNumNodes()) {
             // Set initial frontier size
             if (nodeIdx == 0) {
-                d_frontier.setSize(numNodes);
+                d_frontier.d2d_setSize(d_sequenceGraph.getPangenomeGraph().getNumNodes());
             }
+
+            // Insert node in the frontier without queueing
+            d_frontier.insertWithoutQueueing(nodeIdx);
         }
     }
 
-    __global__ void SequenceGraphKernels::propagations(const SequenceGraph d_sequenceGraph, const Frontier d_frontier, const ::size_t layerIdx) {
-        // Get thread node index
-        const auto threadId{::blockIdx.x * ::blockDim.x + ::threadIdx.x};
-
-        // Get pangenome graph
-        const auto pangenomeGraph{d_sequenceGraph.getPangenomeGraph()};
-
-        // Get current DNA base in the sequence
-        const auto sequence{d_sequenceGraph.getSequence()};
-        const auto currentBase{(*sequence)[layerIdx]};
-
-        // Check for thread overflow and if given node is a root in the corresponding character graph for the given layer
-        if (const auto frontierSize{d_frontier->getSize()}; threadId < frontierSize) {
+    __global__ void SequenceGraphKernels::propagations(const SequenceGraph d_sequenceGraph, const Frontier d_frontier, const ::size_t layerIdx) { // NOLINT
+        // Get thread ID and check for thread overflow
+        if (const auto threadId{::blockIdx.x * ::blockDim.x + ::threadIdx.x}; threadId < d_frontier.getSize()) {
             // Get node index
-            const auto nodeIdx{d_frontier->getValue(threadId)};
-
-            // Get costs double buffer
-            const auto costsDoubleBuffer{d_sequenceGraph->getCostsDoubleBuffer()};
-
-            // Get neighbors
-            const auto neighbors{pangenomeGraph->getNeighbors(nodeIdx)};
-            const auto numNeighbors{pangenomeGraph->getNumNeighbors(nodeIdx)};
+            const auto nodeIdx{d_frontier.getValue(threadId)};
 
             // Get node cost in the current layer
-            const auto currentLayerCost{costsDoubleBuffer->current()[nodeIdx].load(::cuda::memory_order_relaxed)};
+            const auto currentLayerNodeCost{d_sequenceGraph.getCostsDoubleBuffer().current()[nodeIdx].load(::cuda::memory_order_relaxed)};
 
             // Loop over all neighbors
+            const auto neighbors{d_sequenceGraph.getPangenomeGraph().getNeighbors(nodeIdx)};
+            const auto numNeighbors{d_sequenceGraph.getPangenomeGraph().getNumNeighbors(nodeIdx)};
             for (::size_t neighborOffset{0}; neighborOffset < numNeighbors; ++neighborOffset) {
                 // Get neighbor index
                 const auto neighborIdx{neighbors[neighborOffset]};
 
-                // Check if neighbor base value is different from current DNA base in the sequence (edge is in the character graph)
-                if (const auto neighborBaseValue{pangenomeGraph->getDNABase(neighborIdx)}; neighborBaseValue != currentBase) {
-                    // Get node cost in the current layer
-                    const auto currentLayerNeighborCost{costsDoubleBuffer->current()[neighborIdx].load(::cuda::memory_order_relaxed)};
+                // Get node cost in the current layer
+                const auto currentLayerNeighborCost{d_sequenceGraph.getCostsDoubleBuffer().current()[neighborIdx].load(::cuda::memory_order_relaxed)};
 
-                    // Compute updated node cost and check for improvement
-                    if (const auto updatedCost{currentLayerCost + SequenceGraph::INSERTION_COST}; updatedCost < currentLayerNeighborCost) {
-                        // Set cost to atomic min
-                        if (const auto previousNeighborCost{costsDoubleBuffer->current()[neighborIdx].fetch_min(updatedCost)}; updatedCost < previousNeighborCost) {
-                            d_frontier->atomicInsertAndGrow(neighborIdx);
-                        }
+                // Compute updated node cost and check for improvement
+                if (const auto updatedCurrentLayerNeighborCost{currentLayerNodeCost + SequenceGraph::INSERTION_COST}; updatedCurrentLayerNeighborCost < currentLayerNeighborCost) {
+                    // Set cost to atomic min
+                    if (const auto previousNeighborCost{d_sequenceGraph.getCostsDoubleBuffer().current()[neighborIdx].fetch_min(updatedCurrentLayerNeighborCost)}; updatedCurrentLayerNeighborCost < previousNeighborCost) {
+                        d_frontier.d2d_atomicInsertAndGrow(neighborIdx);
                     }
                 }
             }
         }
     }
 
-    __global__ void SequenceGraphKernels::minScore(SequenceGraph* const sequenceGraph) {
+    __global__ void SequenceGraphKernels::minScore(const SequenceGraph d_sequenceGraph, const ::size_t scoreIdx) { // NOLINT
+        // Shared memory array to store the warp-level minima inside the block
+        extern __shared__ ::uint64_t warpMins[];
+
         // Get thread id
         const auto threadId{::blockIdx.x * ::blockDim.x + ::threadIdx.x};
-
-        // Get pangenome graph
-        const auto pangenomeGraph{sequenceGraph->getPangenomeGraph()};
-
-        // Get costs
-        const auto costs{sequenceGraph->getCostsDoubleBuffer()->current()};
-
-        // Shared memory array to store the warp-level minima inside the block
-        __shared__ ::uint64_t warpMins[KernelUtils::MAX_WARPS_PER_BLOCK];
 
         // Initialize thread-level minimum
         auto threadMin{SequenceGraph::SCORE_MAX_VALUE};
 
         // Grid-level reduction using stride (safe for overflowing threads)
         const auto stride{::blockDim.x * ::gridDim.x};
-        const auto numNodes{pangenomeGraph->getNumNodes()};
+        const auto numNodes{d_sequenceGraph.getPangenomeGraph().getNumNodes()};
         for (::size_t i{threadId}; i < numNodes; i += stride) {
-            if (const ::uint64_t cost{costs[i].load(::cuda::memory_order_relaxed)}; cost < threadMin) {
+            if (const ::uint64_t cost{d_sequenceGraph.getCostsDoubleBuffer()[i].load(::cuda::memory_order_relaxed)}; cost < threadMin) {
                 threadMin = cost;
             }
         }
@@ -438,7 +352,7 @@ namespace cuSGA {
         // Block-level reduction using the first warp of each block
         if (warpIdx == 0) {
             // Get warp-level minimum
-            const auto numWarpsPerBlock{(::blockDim.x + KernelUtils::WARP_SIZE - 1) / KernelUtils::WARP_SIZE};
+            const auto numWarpsPerBlock{(::blockDim.x + KernelUtils::WARP_SIZE - 1) >> KernelUtils::WARP_SHIFT};
             threadMin = (::threadIdx.x < numWarpsPerBlock)? warpMins[::threadIdx.x] : SequenceGraph::SCORE_MAX_VALUE;
 
             // Block-level reduction using warp shuffling
@@ -451,7 +365,7 @@ namespace cuSGA {
 
             // Final grid-level reduction using the first thread of each block
             if (laneIdx == 0) {
-                sequenceGraph->getAtomicScore().fetch_min(threadMin, ::cuda::memory_order_relaxed);
+                d_sequenceGraph.getAtomicScore(scoreIdx).fetch_min(threadMin, ::cuda::memory_order_relaxed);
             }
         }
     }

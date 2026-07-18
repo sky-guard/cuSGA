@@ -19,6 +19,7 @@ namespace cuSGA {
         T = 0b11
     };
 
+    // DNA base conversion functions
     namespace DNABaseConversion {
         // Get character for a given DNA base
         __host__ __forceinline__ inline char DNABaseToChar(DNABase base) {
