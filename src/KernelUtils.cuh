@@ -6,6 +6,7 @@ namespace cuSGA::KernelUtils {
     inline constexpr ::size_t WARP_SIZE{32};
     inline constexpr ::size_t MAX_WARPS_PER_BLOCK{32};
     inline constexpr ::size_t WARP_SHIFT{::std::countr_zero(WARP_SIZE)};
+    inline constexpr unsigned BROADCAST_SHUFFLE_MASK{0xFFFFFFFF};
 
     // CUDA_CHECK macro
 #ifndef NDEBUG
@@ -38,14 +39,14 @@ namespace cuSGA::KernelUtils {
     }
 
     // Size block helper
-    template <const auto Kernel, const auto blockSizeToDynamicSMemSize, const ::size_t blockSizeLimit = 0>
-    __host__ __device__ __forceinline__ ::size_t cudaSizeBlockWithDynamicSMem() {
+    template <const auto Kernel, typename BlockSizeToDynamicSMemSizeCalculator, const ::size_t blockSizeLimit = 0>
+    __host__ __device__ __forceinline__ ::size_t cudaSizeBlockWithDynamicSMem(const BlockSizeToDynamicSMemSizeCalculator& calculator) {
         // Compute optimal block size if necessary
         static ::size_t blockSize{0};
         if (blockSize == 0) {
             // Forward call
             ::size_t minGridSize{0};
-            CUDA_CHECK(::cudaOccupancyMaxPotentialBlockSizeVariableSMem(&minGridSize, &blockSize, Kernel, blockSizeToDynamicSMemSize, blockSizeLimit));
+            CUDA_CHECK(::cudaOccupancyMaxPotentialBlockSizeVariableSMem(&minGridSize, &calculator.blockSize, Kernel, calculator, blockSizeLimit));
         }
 
         return blockSize;
@@ -69,6 +70,11 @@ namespace cuSGA::KernelUtils {
     // Bump pointer allocator
     class BumpPtrAllocator {
     public:
+        // Align size according to the given alignment
+        __host__ __device__ __forceinline__ static ::size_t align(const ::size_t size, const ::size_t alignment) {
+            return (size + alignment - 1) & ~(alignment - 1);
+        }
+
         // Default constructor
         BumpPtrAllocator() = default;
 
@@ -86,6 +92,11 @@ namespace cuSGA::KernelUtils {
 
         // Destructor
         ~BumpPtrAllocator() = default;
+
+        // Get initial alignment
+        __host__ __device__ __forceinline__ ::size_t getMaxAlignment() const {
+            return maxAlignment;
+        }
 
         // Get size
         __host__ __device__ __forceinline__ ::size_t getSize() const {
@@ -123,6 +134,11 @@ namespace cuSGA::KernelUtils {
             return alignedCurrentPtr;
         }
 
+        // Set size
+        __host__ __device__ __forceinline__ void setSize(const ::size_t size) {
+            this->size = size;
+        }
+
         // Grow allocator size
         template <typename T>
         __host__ __device__ __forceinline__ void grow(const ::size_t count = 1) {
@@ -143,6 +159,9 @@ namespace cuSGA::KernelUtils {
 
             // Set size to new size
             this->size = newSize;
+
+            // Update max alignment
+            this->maxAlignment = (typeAlignment > maxAlignment) ? typeAlignment : maxAlignment;
         }
 
         // Emplace using constructor and bump pointer
@@ -274,58 +293,67 @@ namespace cuSGA::KernelUtils {
 
         // Initialize using host memory
         __host__ __forceinline__ void initHostMem() {
-            // Malloc memory and set pointer
-            this->ptr = reinterpret_cast<::uintptr_t>(::malloc(size));
+            // Malloc memory
+            void* h_ptr{::malloc(size + maxAlignment)};
+
+            // Set and align pointer
+            this->ptr = align(reinterpret_cast<::uintptr_t>(h_ptr), maxAlignment);
         }
 
         // Initialize using host pinned memory
         __host__ __forceinline__ void initHostPinnedMem() {
             // Cuda malloc host
             void* pinned_ptr{nullptr};
-            CUDA_CHECK(::cudaMallocHost(&pinned_ptr, size));
+            CUDA_CHECK(::cudaMallocHost(&pinned_ptr, size + maxAlignment));
 
-            // Set pointer
-            this->ptr = reinterpret_cast<::uintptr_t>(pinned_ptr);
+            // Set and align pointer
+            this->ptr = align(reinterpret_cast<::uintptr_t>(pinned_ptr), maxAlignment);
         }
 
         // Initialize using device global memory
         __host__ __device__ __forceinline__ void initCudaGMem() {
             // Cuda malloc memory
             void* d_ptr{nullptr};
-            CUDA_CHECK(::cudaMalloc(&d_ptr, size));
+            CUDA_CHECK(::cudaMalloc(&d_ptr, size + maxAlignment));
 
-            // Set pointer
-            this->ptr = reinterpret_cast<::uintptr_t>(d_ptr);
+            // Set and align pointer
+            this->ptr = align(reinterpret_cast<::uintptr_t>(d_ptr), maxAlignment);
         }
 
         // Initialize asynchronously using device global memory
         __host__ __device__ __forceinline__ void initCudaGMemAsync(const cudaStream_t& stream = cudaStreamDefault) {
             // Cuda malloc memory
             void* d_ptr{nullptr};
-            CUDA_CHECK(::cudaMallocAsync(&d_ptr, size, stream));
+            CUDA_CHECK(::cudaMallocAsync(&d_ptr, size + maxAlignment, stream));
 
-            // Set pointer
-            this->ptr = reinterpret_cast<::uintptr_t>(d_ptr);
+            // Set and align pointer
+            this->ptr = align(reinterpret_cast<::uintptr_t>(d_ptr), maxAlignment);
         }
 
         // Initialize using device shared memory
-        __device__ __forceinline__ void initCudaSMem(const ::uintptr_t sharedMemPtr, const ::size_t sharedMemSize) {
-            // Set pointer to the already allocated shared memory
-            this->ptr = sharedMemPtr;
+        __device__ __forceinline__ void initCudaSMem(const ::size_t maxAlignment, const ::size_t sharedMemSize, const ::uintptr_t sharedMemPtr) {
+            // Set max alignment
+            this->maxAlignment = maxAlignment;
 
             // Set size to the allocated shared memory size
             this->size = sharedMemSize;
+
+            // Set and align pointer to the already allocated shared memory
+            this->ptr = align(sharedMemPtr, maxAlignment);
+        }
+
+        // Shuffle object from the given lane, with the given mask
+        __device__ __forceinline__ void shuffle_sync(const unsigned mask, const int srcLaneIdx) {
+            this->maxAlignment = ::__shfl_sync(mask, maxAlignment, srcLaneIdx);
+            this->size = ::__shfl_sync(mask, size, srcLaneIdx);
+            this->ptr = ::__shfl_sync(mask, ptr, srcLaneIdx);
         }
 
     private:
         // Bump pointer allocator implementation
+        ::size_t maxAlignment{0};
         ::size_t size{0};
         ::uintptr_t ptr{0};
-
-        // Align size according to the given alignment
-        __host__ __device__ __forceinline__ static ::size_t align(const ::size_t size, const ::size_t alignment) {
-            return (size + alignment - 1) & ~(alignment - 1);
-        }
 
         // Reserve total bytes for a given type, according to its alignment
         template <typename T>

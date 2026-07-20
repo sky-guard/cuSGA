@@ -14,13 +14,17 @@ namespace cuSGA {
             DoubleBuffer<::size_t>::growBuffers(allocator, size);
 
             // Grow size for isInQueue
-            allocator->grow<::std::remove_pointer_t<decltype(isInQueue)>>(size);
+            allocator->grow<::std::remove_reference_t<decltype(isInQueue[0])>>(size);
         }
 
         // Default constructor
         Frontier() = default;
         // Parameterized constructor
         __host__ Frontier(::size_t size, bool ownsInstance, Frontier* pinned_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
+
+        // Parameterized constructor
+        __host__ __device__ __forceinline__ Frontier(const ::size_t currentSize, const ::size_t alternateSize, const DoubleBuffer<::size_t>& doubleBuffer, ::cuda::atomic<bool, ::cuda::thread_scope_device>* isInQueue, const bool ownsInstance, Frontier* const pinned_instance = nullptr, Frontier* const d_instance = nullptr) : currentSize(currentSize), alternateSize(alternateSize), doubleBuffer(doubleBuffer), isInQueue(isInQueue), ownsInstance(ownsInstance), pinned_instance(pinned_instance), d_instance(d_instance) {}
+
         // Copy constructor
         Frontier(const Frontier& other) = default;
         // Move constructor
@@ -40,6 +44,11 @@ namespace cuSGA {
         // Get frontier size
         __host__ __device__ __forceinline__ ::size_t getSize() const {
             return currentSize;
+        }
+
+        // Get queue size
+        __host__ __device__ __forceinline__ ::size_t getQueueSize() const {
+            return alternateSize;
         }
 
         // Get frontier max size
@@ -99,8 +108,8 @@ namespace cuSGA {
         }
 
         // Grow frontier queue size
-        __host__ __device__ __forceinline__ void growQueueSize() {
-            this->alternateSize += 1;
+        __host__ __device__ __forceinline__ void growQueueSize(const ::size_t count = 1) {
+            this->alternateSize += count;
         }
 
         // Grow device frontier queue size
@@ -119,28 +128,9 @@ namespace cuSGA {
             doubleBuffer.current()[nodeIdx] = nodeIdx;
         }
 
-        // Atomically insert a given node into the queue and grow its size
-        __host__ __device__ __forceinline__ void atomicInsertAndGrow(const ::size_t nodeIdx) {
-            // Insert atomically in queue
-            if (const auto wasInQueue{isInQueue[nodeIdx].exchange(true, ::cuda::memory_order_relaxed)}; !wasInQueue) {
-                // Insert node into next frontier
-                doubleBuffer.alternate()[alternateSize] = nodeIdx;
-
-                // Grow queue size
-                this->alternateSize += 1;
-            }
-        }
-
-        // Atomically insert a given node into the queue and grow its size
-        __device__ __forceinline__ void d2d_atomicInsertAndGrow(const ::size_t nodeIdx) const {
-            // Insert atomically in queue
-            if (const auto wasInQueue{isInQueue[nodeIdx].exchange(true, ::cuda::memory_order_relaxed)}; !wasInQueue) {
-                // Insert node into next frontier
-                doubleBuffer.alternate()[alternateSize] = nodeIdx;
-
-                // Grow queue size
-                d_instance->alternateSize += 1;
-            }
+        // Insert a node into the current frontier queue
+        __host__ __device__ __forceinline__ void insertInQueue(const ::size_t nodeIdx, const ::size_t queueIdx) const {
+            doubleBuffer.alternate()[queueIdx] = nodeIdx;
         }
 
         // Swap from queue to next frontier
@@ -199,6 +189,17 @@ namespace cuSGA {
             }
         }
 
+        // Shuffle object from the given lane, with the given mask
+        __device__ __forceinline__ void shuffle_sync(const unsigned mask, const int srcLaneIdx) {
+            this->currentSize = ::__shfl_sync(mask, currentSize, srcLaneIdx);
+            this->alternateSize = ::__shfl_sync(mask, alternateSize, srcLaneIdx);
+            this->doubleBuffer.shuffle_sync(mask, srcLaneIdx);
+            this->isInQueue = reinterpret_cast<decltype(isInQueue)>(::__shfl_sync(mask, reinterpret_cast<unsigned long long>(isInQueue), srcLaneIdx));
+            this->ownsInstance = ::__shfl_sync(mask, ownsInstance, srcLaneIdx);
+            this->pinned_instance = reinterpret_cast<decltype(pinned_instance)>(::__shfl_sync(mask, reinterpret_cast<unsigned long long>(pinned_instance), srcLaneIdx));
+            this->d_instance = reinterpret_cast<decltype(d_instance)>(::__shfl_sync(mask, reinterpret_cast<unsigned long long>(d_instance), srcLaneIdx));
+        }
+
     private:
         // Frontier implementation
         // NOTE: Uses pinned memory and linearized memory layout on the device memory
@@ -209,9 +210,6 @@ namespace cuSGA {
         bool ownsInstance{false};
         Frontier* pinned_instance{nullptr};
         Frontier* d_instance{nullptr};
-
-        // Parameterized constructor
-        __host__ __device__ __forceinline__ Frontier(const ::size_t currentSize, const ::size_t alternateSize, const DoubleBuffer<::size_t>& doubleBuffer, ::cuda::atomic<bool, ::cuda::thread_scope_device>* isInQueue, const bool ownsInstance, Frontier* const pinned_instance = nullptr, Frontier* const d_instance = nullptr) : currentSize(currentSize), alternateSize(alternateSize), doubleBuffer(doubleBuffer), isInQueue(isInQueue), ownsInstance(ownsInstance), pinned_instance(pinned_instance), d_instance(d_instance) {}
     };
 } // cuSGA
 

@@ -46,7 +46,7 @@ namespace cuSGA {
             this->pinned_instance = pinned_instanceOptional;
         }
         this->numChunks = (maxNumBases + PACKING_FACTOR - 1) / PACKING_FACTOR;
-        this->bases = allocator->emplaceReserve<::std::remove_pointer_t<decltype(bases)>>(numChunks);
+        this->bases = allocator->emplaceReserve<::std::remove_reference_t<decltype(bases[0])>>(numChunks);
         this->ownsInstance = ownsInstance;
     }
 
@@ -84,7 +84,7 @@ namespace cuSGA {
         }
         this->numBases = numBasesOptional.value();
         this->numChunks = (numBases + PACKING_FACTOR - 1) / PACKING_FACTOR;
-        this->bases = allocator->emplaceReserve<::std::remove_pointer_t<decltype(bases)>>(numChunks);
+        this->bases = allocator->emplaceReserve<::std::remove_reference_t<decltype(bases[0])>>(numChunks);
 
         // Read base values from file
         for (::size_t i{0}; i < numBases; ++i) {
@@ -139,7 +139,7 @@ namespace cuSGA {
         }
 
         // Emplace buffers
-        const auto d_bases{allocator->cudaEmplaceCopy<::std::remove_pointer_t<decltype(bases)>>(bases, ::cudaMemcpyHostToDevice, numChunks, false, cudaStreamDefault)};
+        const auto d_bases{allocator->cudaEmplaceCopy<::std::remove_reference_t<decltype(bases[0])>>(bases, ::cudaMemcpyHostToDevice, numChunks, false, cudaStreamDefault)};
 
         // Create temporary host instance holding the device pointers
         const PackedDNASequence d_sequence{numBases, numChunks, d_bases, ownsInstance, pinned_instance, d_instance};

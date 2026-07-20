@@ -5,6 +5,9 @@
 #include <string>
 
 namespace cuSGA::Utils {
+    // Define byte type
+    using byte_t = unsigned char;
+
     // Utils related constants
     inline constexpr ::size_t BYTE_SIZE{8};
 

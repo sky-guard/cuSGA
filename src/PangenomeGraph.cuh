@@ -15,10 +15,10 @@ namespace cuSGA {
             PackedDNASequence::growBuffers(allocator, numNodes);
 
             // Grow size for column values
-            allocator->grow<::std::remove_pointer_t<decltype(columnValues)>>(numEdges);
+            allocator->grow<::std::remove_reference_t<decltype(columnValues[0])>>(numEdges);
 
             // Grow size for row offsets
-            allocator->grow<::std::remove_pointer_t<decltype(rowOffsets)>>(numNodes + 1);
+            allocator->grow<::std::remove_reference_t<decltype(rowOffsets[0])>>(numNodes + 1);
         }
 
         // Default constructor
@@ -27,6 +27,10 @@ namespace cuSGA {
         __host__ PangenomeGraph(const ::std::string& fileName, bool ownsInstance, PangenomeGraph* pinned_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
         // Parameterized constructor
         __host__ PangenomeGraph(const ::std::string& fileName, ::std::ifstream* file, bool ownsInstance, ::std::optional<::size_t> numNodesOptional = ::std::nullopt, ::std::optional<::size_t> numEdgesOptional = ::std::nullopt, PangenomeGraph* pinned_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
+
+        // Pangenome graph constructor
+        __host__ __device__ __forceinline__ PangenomeGraph(const ::size_t numEdges, const PackedDNASequence& baseValues, ::size_t* const columnValues, ::size_t* const rowOffsets, const bool ownsInstance, PangenomeGraph* const pinned_instance = nullptr, PangenomeGraph* const d_instance = nullptr) : numEdges(numEdges), baseValues(baseValues), columnValues(columnValues), rowOffsets(rowOffsets), ownsInstance(ownsInstance), pinned_instance(pinned_instance), d_instance(d_instance) {}
+
         // Copy constructor
         PangenomeGraph(const PangenomeGraph& other) = default;
         // Move constructor
@@ -101,6 +105,17 @@ namespace cuSGA {
             return baseValues.getBuffersRoot();
         }
 
+        // Shuffle object from the given lane, with the given mask
+        __device__ __forceinline__ void shuffle_sync(const unsigned mask, const int srcLaneIdx) {
+            this->numEdges = ::__shfl_sync(mask, numEdges, srcLaneIdx);
+            this->baseValues.shuffle_sync(mask, srcLaneIdx);
+            this->columnValues = reinterpret_cast<decltype(columnValues)>(::__shfl_sync(mask, reinterpret_cast<unsigned long long>(columnValues), srcLaneIdx));
+            this->rowOffsets = reinterpret_cast<decltype(rowOffsets)>(::__shfl_sync(mask, reinterpret_cast<unsigned long long>(rowOffsets), srcLaneIdx));
+            this->ownsInstance = ::__shfl_sync(mask, ownsInstance, srcLaneIdx);
+            this->pinned_instance = reinterpret_cast<decltype(pinned_instance)>(::__shfl_sync(mask, reinterpret_cast<unsigned long long>(pinned_instance), srcLaneIdx));
+            this->d_instance = reinterpret_cast<decltype(d_instance)>(::__shfl_sync(mask, reinterpret_cast<unsigned long long>(d_instance), srcLaneIdx));
+        }
+
     private:
         // CSR pangenome graph implementation
         // NOTE: Uses pinned memory and linearized memory layout on the device memory
@@ -111,9 +126,6 @@ namespace cuSGA {
         bool ownsInstance{false};
         PangenomeGraph* pinned_instance{nullptr};
         PangenomeGraph* d_instance{nullptr};
-
-        // Pangenome graph constructor
-        __host__ __device__ __forceinline__ PangenomeGraph(const ::size_t numEdges, const PackedDNASequence& baseValues, ::size_t* const columnValues, ::size_t* const rowOffsets, const bool ownsInstance, PangenomeGraph* const pinned_instance = nullptr, PangenomeGraph* const d_instance = nullptr) : numEdges(numEdges), baseValues(baseValues), columnValues(columnValues), rowOffsets(rowOffsets), ownsInstance(ownsInstance), pinned_instance(pinned_instance), d_instance(d_instance) {}
     };
 } // cuSGA
 

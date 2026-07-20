@@ -50,6 +50,15 @@ namespace cuSGA {
             }
         }
 
+        // Parameterized constructor
+        __host__ __device__ __forceinline__ DoubleBuffer(const ::size_t size, T* const (& buffers)[NUM_DOUBLE_BUFFERS], const ::size_t selector, const bool ownsInstance, DoubleBuffer* const pinned_instance = nullptr, DoubleBuffer* const d_instance = nullptr) : size(size), selector(selector), ownsInstance(ownsInstance), pinned_instance(pinned_instance), d_instance(d_instance) {
+            // Set buffers
+#pragma unroll
+            for (::size_t i{0}; i < NUM_DOUBLE_BUFFERS; ++i) {
+                this->buffers[i] = buffers[i];
+            }
+        }
+
         // Copy constructor
         DoubleBuffer(const DoubleBuffer& other) = default;
 
@@ -195,6 +204,19 @@ namespace cuSGA {
             return buffers[selector][idx];
         }
 
+        // Shuffle object from the given lane, with the given mask
+        __device__ __forceinline__ void shuffle_sync(const unsigned mask, const int srcLaneIdx) {
+            this->size = ::__shfl_sync(mask, size, srcLaneIdx);
+#pragma unroll
+            for (::size_t i{0}; i < NUM_DOUBLE_BUFFERS; ++i) {
+                this->buffers[i] = reinterpret_cast<T>(::__shfl_sync(mask, reinterpret_cast<unsigned long long>(buffers[i]), srcLaneIdx));
+            }
+            this->selector = ::__shfl_sync(mask, selector, srcLaneIdx);
+            this->ownsInstance = ::__shfl_sync(mask, ownsInstance, srcLaneIdx);
+            this->pinned_instance = reinterpret_cast<decltype(pinned_instance)>(::__shfl_sync(mask, reinterpret_cast<unsigned long long>(pinned_instance), srcLaneIdx));
+            this->d_instance = reinterpret_cast<decltype(d_instance)>(::__shfl_sync(mask, reinterpret_cast<unsigned long long>(d_instance), srcLaneIdx));
+        }
+
     private:
         // Double buffer implementation
         // NOTE: Uses pinned memory and linearized memory layout on the device memory
@@ -204,15 +226,6 @@ namespace cuSGA {
         bool ownsInstance{false};
         DoubleBuffer* pinned_instance{nullptr};
         DoubleBuffer* d_instance{nullptr};
-
-        // Parameterized constructor
-        __host__ __device__ __forceinline__ DoubleBuffer(const ::size_t size, T* const (& buffers)[NUM_DOUBLE_BUFFERS], const ::size_t selector, const bool ownsInstance, DoubleBuffer* const pinned_instance = nullptr, DoubleBuffer* const d_instance = nullptr) : size(size), selector(selector), ownsInstance(ownsInstance), pinned_instance(pinned_instance), d_instance(d_instance) {
-            // Set buffers
-#pragma unroll
-            for (::size_t i{0}; i < NUM_DOUBLE_BUFFERS; ++i) {
-                this->buffers[i] = buffers[i];
-            }
-        }
     };
 } // cuSGA
 

@@ -49,8 +49,8 @@ namespace cuSGA {
         }
         this->numEdges = numEdges;
         this->baseValues = PackedDNASequence{fileName, &file, false, numNodes, &pinned_instance->baseValues, allocator};
-        this->columnValues = allocator->emplaceReserve<::std::remove_pointer_t<decltype(columnValues)>>(numEdges);
-        this->rowOffsets = allocator->emplaceReserve<::std::remove_pointer_t<decltype(rowOffsets)>>(numNodes + 1);
+        this->columnValues = allocator->emplaceReserve<::std::remove_reference_t<decltype(columnValues[0])>>(numEdges);
+        this->rowOffsets = allocator->emplaceReserve<::std::remove_reference_t<decltype(rowOffsets[0])>>(numNodes + 1);
     }
 
     __host__ PangenomeGraph::PangenomeGraph(const ::std::string& fileName, ::std::ifstream* file, const bool ownsInstance, ::std::optional<::size_t> numNodesOptional, ::std::optional<::size_t> numEdgesOptional, PangenomeGraph* pinned_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) : PangenomeGraph(0, PackedDNASequence{}, nullptr, nullptr, ownsInstance, pinned_instanceOptional) {
@@ -96,8 +96,8 @@ namespace cuSGA {
         }
         this->numEdges = numEdgesOptional.value();
         this->baseValues = PackedDNASequence{fileName, file, false, numNodesOptional.value(), &pinned_instance->baseValues, allocator};
-        this->columnValues = allocator->emplaceReserve<::std::remove_pointer_t<decltype(columnValues)>>(numEdges);
-        this->rowOffsets = allocator->emplaceReserve<::std::remove_pointer_t<decltype(rowOffsets)>>(numNodesOptional.value() + 1);
+        this->columnValues = allocator->emplaceReserve<::std::remove_reference_t<decltype(columnValues[0])>>(numEdges);
+        this->rowOffsets = allocator->emplaceReserve<::std::remove_reference_t<decltype(rowOffsets[0])>>(numNodesOptional.value() + 1);
 
         // Read row offsets from file
         for (::size_t i{0}; i <= numNodesOptional.value(); ++i) {
@@ -148,8 +148,8 @@ namespace cuSGA {
 
         // Emplace buffers
         const auto d_baseValues{baseValues.copyToDevice(&d_instance->baseValues, allocator)};
-        const auto d_columnValues{allocator->cudaEmplaceCopy<::std::remove_pointer_t<decltype(columnValues)>>(columnValues, ::cudaMemcpyHostToDevice, numEdges, false, cudaStreamDefault)};
-        const auto d_rowOffsets{allocator->cudaEmplaceCopy<::std::remove_pointer_t<decltype(rowOffsets)>>(rowOffsets, ::cudaMemcpyHostToDevice, baseValues.getNumBases() + 1, false, cudaStreamDefault)};
+        const auto d_columnValues{allocator->cudaEmplaceCopy<::std::remove_reference_t<decltype(columnValues[0])>>(columnValues, ::cudaMemcpyHostToDevice, numEdges, false, cudaStreamDefault)};
+        const auto d_rowOffsets{allocator->cudaEmplaceCopy<::std::remove_reference_t<decltype(rowOffsets[0])>>(rowOffsets, ::cudaMemcpyHostToDevice, baseValues.getNumBases() + 1, false, cudaStreamDefault)};
 
         // Create temporary host instance holding the device pointers
         const PangenomeGraph d_pangenomeGraph{baseValues.getNumBases(), numEdges, d_baseValues, d_columnValues, d_rowOffsets, d_pangenomeGraph};

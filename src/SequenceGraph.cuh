@@ -22,20 +22,19 @@ namespace cuSGA {
         // Deletions kernel
         __global__ void deletions(SequenceGraph d_sequenceGraph);
 
-        // Insertions kernel
-        __global__ void insertions(SequenceGraph d_sequenceGraph, Frontier d_frontier);
-
-        // Propagations kernel
-        __global__ void propagations(SequenceGraph d_sequenceGraph, Frontier d_frontier, ::size_t layerIdx);
+        // Insertions and propagations kernel
+        __device__ __forceinline__ void processNeighbor(const SequenceGraph& d_sequenceGraph, Frontier* warpFrontier, ::size_t neighborIdx, ::uint64_t updatedCurrentLayerNeighborCost, ::size_t laneIdx);
+        __global__ void insertionsAndPropagations(SequenceGraph d_sequenceGraph, ::size_t layerIdx);
 
         // Minimum score kernel
-        inline constexpr unsigned MIN_SCORE_SHUFFLE_MASK{0xFFFFFFFF};
-        __host__ __device__ __forceinline__ inline ::size_t minScoreSMemCalculator(const ::size_t blockSize) {
-            // Get number of warps in the block
-            const auto numWarps{blockSize / KernelUtils::WARP_SIZE};
+        struct MinScoreSMemCalculator {
+            __host__ __device__ __forceinline__ inline ::size_t operator()(const ::size_t blockSize) const {
+                // Get number of warps in the block
+                const auto numWarps{blockSize >> KernelUtils::WARP_SHIFT};
 
-            return numWarps * sizeof(::size_t);
-        }
+                return numWarps * sizeof(::size_t);
+            }
+        };
         __global__ void minScore(SequenceGraph d_sequenceGraph, ::size_t scoreIdx);
     } // SequenceGraphKernels
 
@@ -58,22 +57,41 @@ namespace cuSGA {
             PangenomeGraph::growBuffers(allocator, numNodes, numEdges);
 
             // Grow size for connected components offsets
-            allocator->grow<::std::remove_pointer_t<decltype(connectedComponentsOffsets)>>(totalNumConnectedComponents);
+            allocator->grow<::std::remove_reference_t<decltype(connectedComponentsOffsets[0])>>(totalNumConnectedComponents);
 
             // Grow size for connected components mappings
-            allocator->grow<::std::remove_pointer_t<decltype(connectedComponentsMappings)>>(NUM_BASES * numNodes);
+            allocator->grow<::std::remove_reference_t<decltype(connectedComponentsMappings[0])>>(NUM_BASES * numNodes);
 
             // Grow size for costs double buffer
             DoubleBuffer<::size_t>::growBuffers(allocator, numNodes);
 
             // Grow size for scores
-            allocator->grow<::std::remove_pointer_t<decltype(scores)>>(numScores);
+            allocator->grow<::std::remove_reference_t<decltype(scores[0])>>(numScores);
         }
 
         // Default constructor
         SequenceGraph() = default;
         // Parameterized constructor
         __host__ SequenceGraph(const ::std::string& pangenomeGraphFileName, ::std::string const (& connectedComponentsFileNames)[NUM_BASES], bool ownsInstance, SequenceGraph* pinned_instanceOptional = nullptr, SequenceGraph* d_instanceOptional = nullptr);
+
+        // Sequence graph constructor
+        __host__ __device__ __forceinline__ SequenceGraph(const PackedDNASequence& sequence, const PangenomeGraph& pangenomeGraph, ::size_t const (& numConnectedComponents)[NUM_BASES], ::size_t* const (& connectedComponentsOffsets)[NUM_BASES], ::size_t* const (& connectedComponentsMappings)[NUM_BASES], ::size_t const (& maxConnectedComponentsSizes)[NUM_BASES], const DoubleBuffer<::cuda::atomic<::uint64_t, ::cuda::thread_scope_device>>& costsDoubleBuffer, const ::size_t numScores, ::cuda::atomic<::uint64_t, ::cuda::thread_scope_device>* const scores, const bool ownsInstance, SequenceGraph* const pinned_instance = nullptr, SequenceGraph* const d_instance = nullptr) : sequence(sequence), pangenomeGraph(pangenomeGraph), costsDoubleBuffer(costsDoubleBuffer), numScores(numScores), scores(scores), ownsInstance(ownsInstance), pinned_instance(pinned_instance), d_instance(d_instance) {
+#pragma unroll
+            for (::size_t i{0}; i < NUM_BASES; ++i) {
+                // Set number of connected components
+                this->numConnectedComponents[i] = numConnectedComponents[i];
+
+                // Set connected components offsets
+                this->connectedComponentsOffsets[i] = connectedComponentsOffsets[i];
+
+                // Set connected components mappings
+                this->connectedComponentsMappings[i] = connectedComponentsMappings[i];
+
+                // Set max connected components sizes
+                this->maxConnectedComponentsSizes[i] = maxConnectedComponentsSizes[i];
+            }
+        }
+
         // Copy constructor
         SequenceGraph(const SequenceGraph& other) = default;
         // Move constructor
@@ -111,8 +129,13 @@ namespace cuSGA {
         }
 
         // Get connected component mapping for a given character graph DNA base and node index
-        __host__ __device__ __forceinline__ ::size_t getConnectedComponentMapping(DNABase characterGraphBase, const ::size_t nodeIdx) const {
+        __host__ __device__ __forceinline__ ::size_t getConnectedComponentMapping(const DNABase characterGraphBase, const ::size_t nodeIdx) const {
             return connectedComponentsMappings[static_cast<::size_t>(characterGraphBase)][nodeIdx];
+        }
+
+        // Get max connected component size for a given character graph DNA base
+        __host__ __device__ __forceinline__ ::size_t getMaxConnectedComponentSize(const DNABase characterGraphBase) const {
+            return maxConnectedComponentsSizes[static_cast<::size_t>(characterGraphBase)];
         }
 
         // Get costs double buffer
@@ -166,6 +189,25 @@ namespace cuSGA {
             }
         }
 
+        // Shuffle object from the given lane, with the given mask
+        __device__ __forceinline__ void shuffle_sync(const unsigned mask, const int srcLaneIdx) {
+            this->sequence.shuffle_sync(mask, srcLaneIdx);
+            this->pangenomeGraph.shuffle_sync(mask, srcLaneIdx);
+#pragma unroll
+            for (::size_t i{0}; i < NUM_BASES; ++i) {
+                this->numConnectedComponents[i] = ::__shfl_sync(mask, numConnectedComponents[i], srcLaneIdx);
+                this->connectedComponentsOffsets[i] = reinterpret_cast<::std::remove_reference_t<decltype(connectedComponentsOffsets[0])>>(::__shfl_sync(mask, reinterpret_cast<unsigned long long>(connectedComponentsOffsets[i]), srcLaneIdx));
+                this->connectedComponentsMappings[i] = reinterpret_cast<::std::remove_reference_t<decltype(connectedComponentsMappings[0])>>(::__shfl_sync(mask, reinterpret_cast<unsigned long long>(connectedComponentsMappings[i]), srcLaneIdx));
+                this->maxConnectedComponentsSizes[i] = ::__shfl_sync(mask, maxConnectedComponentsSizes[i], srcLaneIdx);
+            }
+            this->costsDoubleBuffer.shuffle_sync(mask, srcLaneIdx);
+            this->numScores = ::__shfl_sync(mask, numScores, srcLaneIdx);
+            this->scores = reinterpret_cast<decltype(scores)>(::__shfl_sync(mask, reinterpret_cast<unsigned long long>(scores), srcLaneIdx));
+            this->ownsInstance = ::__shfl_sync(mask, ownsInstance, srcLaneIdx);
+            this->pinned_instance = reinterpret_cast<decltype(pinned_instance)>(::__shfl_sync(mask, reinterpret_cast<unsigned long long>(pinned_instance), srcLaneIdx));
+            this->d_instance = reinterpret_cast<decltype(d_instance)>(::__shfl_sync(mask, reinterpret_cast<unsigned long long>(d_instance), srcLaneIdx));
+        }
+
         // Align sequence
         __host__ void align(const ::std::string& sequenceFileName);
 
@@ -205,41 +247,35 @@ namespace cuSGA {
             KernelUtils::cudaLaunchKernel<SequenceGraphKernels::deletions>(gridSize, blockSize, 0, cudaStreamDefault, *pinned_instance, layerIdx);
         }
 
-        // Launch insertions kernel
-        __host__ __forceinline__ void insertions(const Frontier& d_frontier) const {
-            // Get block size
-            const auto blockSize{KernelUtils::cudaSizeBlock<SequenceGraphKernels::insertions>()};
+        // Launch insertions and propagations kernel
+        __host__ __forceinline__ void insertionsAndPropagations(const ::size_t layerIdx) const {
+            // Get block size and round it down to be a multiple of WARP_SIZE
+            auto blockSize{KernelUtils::cudaSizeBlock<SequenceGraphKernels::insertionsAndPropagations>()};
+            blockSize &= ~(KernelUtils::WARP_SIZE - 1);
+            blockSize = (blockSize < KernelUtils::WARP_SIZE) ? KernelUtils::WARP_SIZE : blockSize;
 
-            // Get grid size
-            const auto gridSize{KernelUtils::cudaSizeGrid(pangenomeGraph.getNumNodes(), blockSize)};
-
-            // Launch kernel
-            KernelUtils::cudaLaunchKernel<SequenceGraphKernels::insertions>(gridSize, blockSize, 0, cudaStreamDefault, *pinned_instance, d_frontier);
-        }
-
-        // Launch propagations kernel
-        __host__ __forceinline__ void propagations(const Frontier& d_frontier, const ::size_t layerIdx) const {
-            // Get block size
-            const auto blockSize{KernelUtils::cudaSizeBlock<SequenceGraphKernels::propagations>()};
-
-            // Get grid size
-            const auto gridSize{KernelUtils::cudaSizeGrid(d_frontier.getSize(), blockSize)};
+            // Get grid size (one warp per connected component)
+            const auto numConnectedComponents{this->numConnectedComponents[static_cast<::size_t>(sequence[layerIdx])]};
+            const auto numWarpsPerBlock{blockSize >> KernelUtils::WARP_SHIFT};
+            const auto gridSize{numConnectedComponents / numWarpsPerBlock};
 
             // Launch kernel
-            KernelUtils::cudaLaunchKernel<SequenceGraphKernels::propagations>(gridSize, blockSize, 0, cudaStreamDefault, *pinned_instance, d_frontier, layerIdx);
+            KernelUtils::cudaLaunchKernel<SequenceGraphKernels::insertionsAndPropagations>(gridSize, blockSize, 0, cudaStreamDefault, *pinned_instance, layerIdx);
         }
 
         // Launch min score kernel
         __host__ __forceinline__ void minScore(const ::size_t scoreIdx) const {
             // Get block size and round it down to be a multiple of WARP_SIZE
-            auto blockSize{KernelUtils::cudaSizeBlockWithDynamicSMem<SequenceGraphKernels::minScore, SequenceGraphKernels::minScoreSMemCalculator>()};
+            constexpr auto calculator{SequenceGraphKernels::MinScoreSMemCalculator{}};
+            auto blockSize{KernelUtils::cudaSizeBlockWithDynamicSMem<SequenceGraphKernels::minScore, SequenceGraphKernels::MinScoreSMemCalculator>(calculator)};
             blockSize &= ~(KernelUtils::WARP_SIZE - 1);
+            blockSize = (blockSize < KernelUtils::WARP_SIZE) ? KernelUtils::WARP_SIZE : blockSize;
 
             // Get grid size
             const auto gridSize{KernelUtils::cudaSizeGrid(pangenomeGraph.getNumNodes(), blockSize)};
 
             // Get dynamic shared memory size
-            const auto dynamicSMemSize{SequenceGraphKernels::minScoreSMemCalculator(blockSize)};
+            const auto dynamicSMemSize{calculator(blockSize)};
 
             // Launch kernel
             KernelUtils::cudaLaunchKernel<SequenceGraphKernels::minScore>(gridSize, blockSize, dynamicSMemSize, cudaStreamDefault, *pinned_instance, scoreIdx);
@@ -247,32 +283,19 @@ namespace cuSGA {
 
     private:
         // Sequence graph implementation
+        // NOTE: Uses pinned memory and linearized memory layout on the device memory
         PackedDNASequence sequence{};
         PangenomeGraph pangenomeGraph{};
         ::size_t numConnectedComponents[NUM_BASES]{};
         ::size_t* connectedComponentsOffsets[NUM_BASES]{nullptr};
         ::size_t* connectedComponentsMappings[NUM_BASES]{nullptr};
+        ::size_t maxConnectedComponentsSizes[NUM_BASES]{};
         DoubleBuffer<::cuda::atomic<::uint64_t, ::cuda::thread_scope_device>> costsDoubleBuffer{};
         ::size_t numScores{0};
         ::cuda::atomic<::uint64_t, ::cuda::thread_scope_device>* scores{nullptr};
         bool ownsInstance{false};
         SequenceGraph* pinned_instance{nullptr};
         SequenceGraph* d_instance{nullptr};
-
-        // Sequence graph constructor
-        __host__ __device__ __forceinline__ SequenceGraph(const PackedDNASequence& sequence, const PangenomeGraph& pangenomeGraph, ::size_t const (& numConnectedComponents)[NUM_BASES], ::size_t* const (& connectedComponentsOffsets)[NUM_BASES], ::size_t* const (& connectedComponentsMappings)[NUM_BASES], const DoubleBuffer<::cuda::atomic<::uint64_t, ::cuda::thread_scope_device>>& costsDoubleBuffer, const ::size_t numScores, ::cuda::atomic<::uint64_t, ::cuda::thread_scope_device>* const scores, const bool ownsInstance, SequenceGraph* const pinned_instance = nullptr, SequenceGraph* const d_instance = nullptr) : sequence(sequence), pangenomeGraph(pangenomeGraph), costsDoubleBuffer(costsDoubleBuffer), numScores(numScores), scores(scores), ownsInstance(ownsInstance), pinned_instance(pinned_instance), d_instance(d_instance) {
-#pragma unroll
-            for (::size_t i{0}; i < NUM_BASES; ++i) {
-                // Set number of cuts
-                this->numConnectedComponents[i] = numConnectedComponents[i];
-
-                // Set cuts buffers
-                this->connectedComponentsOffsets[i] = connectedComponentsOffsets[i];
-
-                // Set components buffers
-                this->connectedComponentsMappings[i] = connectedComponentsMappings[i];
-            }
-        }
     };
 } // cuSGA
 

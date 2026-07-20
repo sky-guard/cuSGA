@@ -24,7 +24,7 @@ namespace cuSGA {
         __host__ __device__ __forceinline__ static void growBuffers(KernelUtils::BumpPtrAllocator* const allocator, const ::size_t numBases) {
             // Grow size for bases
             const auto numChunks{(numBases + PACKING_FACTOR - 1) / PACKING_FACTOR};
-            allocator->grow<::std::remove_pointer_t<decltype(bases)>>(numChunks);
+            allocator->grow<::std::remove_reference_t<decltype(bases[0])>>(numChunks);
         }
 
         // Default constructor
@@ -33,6 +33,10 @@ namespace cuSGA {
         __host__ PackedDNASequence(const ::std::string& fileName, bool ownsInstance, PackedDNASequence* pinned_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
         // Parameterized constructor
         __host__ PackedDNASequence(const ::std::string& fileName, ::std::ifstream* file, bool ownsInstance, ::std::optional<::size_t> numBasesOptional = ::std::nullopt, PackedDNASequence* pinned_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
+
+        // Parameterized constructor
+        __host__ __device__ __forceinline__ PackedDNASequence(const ::size_t numBases, const ::size_t numChunks, pack_t* const bases, const bool ownsInstance, PackedDNASequence* const pinned_instance = nullptr, PackedDNASequence* const d_instance = nullptr) : numBases(numBases), numChunks(numChunks), bases(bases), ownsInstance(ownsInstance), pinned_instance(pinned_instance), d_instance(d_instance) {}
+
         // Copy constructor
         PackedDNASequence(const PackedDNASequence& other) = default;
         // Move constructor
@@ -95,6 +99,16 @@ namespace cuSGA {
         // Read packed sequence from opened file
         __host__ bool readFromFile(const ::std::string& fileName, ::std::ifstream* file) const;
 
+        // Shuffle object from the given lane, with the given mask
+        __device__ __forceinline__ void shuffle_sync(const unsigned mask, const int srcLaneIdx) {
+            this->numBases = ::__shfl_sync(mask, numBases, srcLaneIdx);
+            this->numChunks = ::__shfl_sync(mask, numChunks, srcLaneIdx);
+            this->bases = reinterpret_cast<decltype(bases)>(::__shfl_sync(mask, reinterpret_cast<unsigned long long>(bases), srcLaneIdx));
+            this->ownsInstance = ::__shfl_sync(mask, ownsInstance, srcLaneIdx);
+            this->pinned_instance = reinterpret_cast<decltype(pinned_instance)>(::__shfl_sync(mask, reinterpret_cast<unsigned long long>(pinned_instance), srcLaneIdx));
+            this->d_instance = reinterpret_cast<decltype(d_instance)>(::__shfl_sync(mask, reinterpret_cast<unsigned long long>(d_instance), srcLaneIdx));
+        }
+
     private:
         // Bit packed sequence implementation
         // NOTE: Uses pinned memory and linearized memory layout on the device memory
@@ -104,9 +118,6 @@ namespace cuSGA {
         bool ownsInstance{false};
         PackedDNASequence* pinned_instance{nullptr};
         PackedDNASequence* d_instance{nullptr};
-
-        // Parameterized constructor
-        __host__ __device__ __forceinline__ PackedDNASequence(const ::size_t numBases, const ::size_t numChunks, pack_t* const bases, const bool ownsInstance, PackedDNASequence* const pinned_instance = nullptr, PackedDNASequence* const d_instance = nullptr) : numBases(numBases), numChunks(numChunks), bases(bases), ownsInstance(ownsInstance), pinned_instance(pinned_instance), d_instance(d_instance) {}
     };
 } // cuSGA
 
