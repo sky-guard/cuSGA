@@ -6,7 +6,7 @@
 #include "KernelUtils.cuh"
 
 namespace cuSGA {
-    __host__ PangenomeGraph::PangenomeGraph(const ::std::string& fileName, bool ownsInstance, PangenomeGraph* pinned_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) : PangenomeGraph(0, PackedDNASequence{}, nullptr, nullptr, ownsInstance, pinned_instanceOptional) {
+    __host__ PangenomeGraph::PangenomeGraph(const ::std::string& fileName, bool ownsInstance, PangenomeGraph* pinned_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) : PangenomeGraph{0, PackedDNASequence{}, nullptr, nullptr, ownsInstance, pinned_instanceOptional} {
         // Get allocator
         KernelUtils::BumpPtrAllocator* allocator{allocatorOptional};
         KernelUtils::BumpPtrAllocator allocatorInstance{};
@@ -18,13 +18,13 @@ namespace cuSGA {
         auto file{Utils::openFile(fileName)};
 
         // Read number of nodes from file
-        ::size_t numNodes{0};
+        nodeSize_t numNodes{0};
         if (!(file >> numNodes)) {
             throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", fileName)};
         }
 
         // Read number of edges from file
-        ::size_t numEdges{0};
+        edgeSize_t numEdges{0};
         if (!(file >> numEdges)) {
             throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", fileName)};
         }
@@ -53,7 +53,7 @@ namespace cuSGA {
         this->rowOffsets = allocator->emplaceReserve<::std::remove_reference_t<decltype(rowOffsets[0])>>(numNodes + 1);
     }
 
-    __host__ PangenomeGraph::PangenomeGraph(const ::std::string& fileName, ::std::ifstream* file, const bool ownsInstance, ::std::optional<::size_t> numNodesOptional, ::std::optional<::size_t> numEdgesOptional, PangenomeGraph* pinned_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) : PangenomeGraph(0, PackedDNASequence{}, nullptr, nullptr, ownsInstance, pinned_instanceOptional) {
+    __host__ PangenomeGraph::PangenomeGraph(const ::std::string& fileName, ::std::ifstream* file, const bool ownsInstance, ::std::optional<nodeSize_t> numNodesOptional, ::std::optional<edgeSize_t> numEdgesOptional, PangenomeGraph* pinned_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) : PangenomeGraph{0, PackedDNASequence{}, nullptr, nullptr, ownsInstance, pinned_instanceOptional} {
         // Get allocator
         KernelUtils::BumpPtrAllocator* allocator{allocatorOptional};
         KernelUtils::BumpPtrAllocator allocatorInstance{};
@@ -63,7 +63,7 @@ namespace cuSGA {
 
         // Read number of nodes from file if missing
         if (!numNodesOptional.has_value()) {
-            ::size_t numNodes{0};
+            nodeSize_t numNodes{0};
             if (!(*file >> numNodes)) {
                 throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", fileName)};
             }
@@ -72,7 +72,7 @@ namespace cuSGA {
 
         // Read number of edges from file if missing
         if (!numEdgesOptional.has_value()) {
-            ::size_t numEdges{0};
+            edgeSize_t numEdges{0};
             if (!(*file >> numEdges)) {
                 throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", fileName)};
             }
@@ -100,14 +100,14 @@ namespace cuSGA {
         this->rowOffsets = allocator->emplaceReserve<::std::remove_reference_t<decltype(rowOffsets[0])>>(numNodesOptional.value() + 1);
 
         // Read row offsets from file
-        for (::size_t i{0}; i <= numNodesOptional.value(); ++i) {
+        for (nodeSize_t i{0}; i <= numNodesOptional.value(); ++i) {
             if (!(*file >> rowOffsets[i])) {
                 throw ::std::runtime_error{::std::format("An error occurred while reading CSR row offsets from file: {}", fileName)};
             }
         }
 
         // Read column values from file
-        for (::size_t i{0}; i < numEdges; ++i) {
+        for (edgeSize_t i{0}; i < numEdges; ++i) {
             if (!(*file >> columnValues[i])) {
                 throw ::std::runtime_error{::std::format("An error occurred while reading CSR column values from file: {}", fileName)};
             }

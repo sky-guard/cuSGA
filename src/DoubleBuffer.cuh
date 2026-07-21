@@ -1,17 +1,26 @@
 #ifndef CUSGA_DOUBLEBUFFER_CUH
 #define CUSGA_DOUBLEBUFFER_CUH
+#include <cstdint>
+
 #include "KernelUtils.cuh"
+#include "Utils.cuh"
 
 namespace cuSGA {
+    // Define double buffer size type
+    using doubleBufferSize_t = ::uint8_t;
+
+    // Define selector type
+    using selector_t = ::uint8_t;
+
     // Double buffer
     template <typename T>
     class DoubleBuffer {
     public:
         // Double buffer related constants
-        static constexpr ::size_t NUM_DOUBLE_BUFFERS{2};
+        static constexpr doubleBufferSize_t NUM_DOUBLE_BUFFERS{2};
 
         // Grow allocator using the expected buffers size
-        __host__ __device__ __forceinline__ static void growBuffers(KernelUtils::BumpPtrAllocator* const allocator, const ::size_t size) {
+        __host__ __device__ __forceinline__ static void growBuffers(KernelUtils::BumpPtrAllocator* const allocator, const targetSize_t size) {
             // Grow size for buffers
             allocator->grow<T>(NUM_DOUBLE_BUFFERS * size);
         }
@@ -20,7 +29,7 @@ namespace cuSGA {
         DoubleBuffer() = default;
 
         // Parameterized constructor
-        __host__ DoubleBuffer(const ::size_t size, const bool ownsInstance,  DoubleBuffer* const pinned_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* const allocatorOptional = nullptr) : DoubleBuffer(size, {nullptr}, 0, ownsInstance, pinned_instanceOptional) {
+        __host__ DoubleBuffer(const targetSize_t size, const bool ownsInstance,  DoubleBuffer* const pinned_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* const allocatorOptional = nullptr) : DoubleBuffer{size, {nullptr}, 0, ownsInstance, pinned_instanceOptional} {
             // Get allocator
             KernelUtils::BumpPtrAllocator* allocator{allocatorOptional};
             KernelUtils::BumpPtrAllocator allocatorInstance{};
@@ -45,16 +54,19 @@ namespace cuSGA {
             }
             const auto basePtr{allocator->emplaceReserve<T>(NUM_DOUBLE_BUFFERS * size)};
 #pragma unroll
-            for (::size_t i{0}; i < NUM_DOUBLE_BUFFERS; ++i) {
+            for (doubleBufferSize_t i{0}; i < NUM_DOUBLE_BUFFERS; ++i) {
                 this->buffers[i] = basePtr + i * (size * sizeof(T));
             }
         }
 
         // Parameterized constructor
-        __host__ __device__ __forceinline__ DoubleBuffer(const ::size_t size, T* const (& buffers)[NUM_DOUBLE_BUFFERS], const ::size_t selector, const bool ownsInstance, DoubleBuffer* const pinned_instance = nullptr, DoubleBuffer* const d_instance = nullptr) : size(size), selector(selector), ownsInstance(ownsInstance), pinned_instance(pinned_instance), d_instance(d_instance) {
+        __host__ __device__ __forceinline__ DoubleBuffer(const targetSize_t size, T* const current, T* const alternate, const selector_t selector, const bool ownsInstance, DoubleBuffer* const pinned_instance = nullptr, DoubleBuffer* const d_instance = nullptr) : size{size}, buffers{current, alternate}, selector{selector}, ownsInstance{ownsInstance}, pinned_instance{pinned_instance}, d_instance{d_instance} {}
+
+        // Parameterized constructor
+        __host__ __device__ __forceinline__ DoubleBuffer(const targetSize_t size, T* const (& buffers)[NUM_DOUBLE_BUFFERS], const selector_t selector, const bool ownsInstance, DoubleBuffer* const pinned_instance = nullptr, DoubleBuffer* const d_instance = nullptr) : size{size}, selector{selector}, ownsInstance{ownsInstance}, pinned_instance{pinned_instance}, d_instance{d_instance} {
             // Set buffers
 #pragma unroll
-            for (::size_t i{0}; i < NUM_DOUBLE_BUFFERS; ++i) {
+            for (doubleBufferSize_t i{0}; i < NUM_DOUBLE_BUFFERS; ++i) {
                 this->buffers[i] = buffers[i];
             }
         }
@@ -111,7 +123,7 @@ namespace cuSGA {
             const auto d_buffersBase{allocator->cudaEmplaceCopy<T>(buffers[0], ::cudaMemcpyHostToDevice, NUM_DOUBLE_BUFFERS * size, false, cudaStreamDefault)};
             T* d_buffers[NUM_DOUBLE_BUFFERS]{nullptr};
 #pragma unroll
-            for (::size_t i{0}; i < NUM_DOUBLE_BUFFERS; ++i) {
+            for (doubleBufferSize_t i{0}; i < NUM_DOUBLE_BUFFERS; ++i) {
                 this->buffers[i] = d_buffersBase + i * (size * sizeof(T));
             }
 
@@ -149,7 +161,7 @@ namespace cuSGA {
         }
 
         // Get size
-        __host__ __device__ __forceinline__ ::size_t getSize() const {
+        __host__ __device__ __forceinline__ targetSize_t getSize() const {
             return size;
         }
 
@@ -195,12 +207,12 @@ namespace cuSGA {
         }
 
         // Non-const version of subscription operator for assignment and modification
-        __host__ __device__ __forceinline__ T& operator[](const ::size_t idx) {
+        __host__ __device__ __forceinline__ T& operator[](const targetSize_t idx) {
             return buffers[selector][idx];
         }
 
         // Const version of subscription operator for read-only access
-        __host__ __device__ __forceinline__ const T& operator[](const ::size_t idx) const {
+        __host__ __device__ __forceinline__ const T& operator[](const targetSize_t idx) const {
             return buffers[selector][idx];
         }
 
@@ -208,8 +220,8 @@ namespace cuSGA {
         __device__ __forceinline__ void shuffle_sync(const unsigned mask, const int srcLaneIdx) {
             this->size = ::__shfl_sync(mask, size, srcLaneIdx);
 #pragma unroll
-            for (::size_t i{0}; i < NUM_DOUBLE_BUFFERS; ++i) {
-                this->buffers[i] = reinterpret_cast<T>(::__shfl_sync(mask, reinterpret_cast<unsigned long long>(buffers[i]), srcLaneIdx));
+            for (doubleBufferSize_t i{0}; i < NUM_DOUBLE_BUFFERS; ++i) {
+                this->buffers[i] = reinterpret_cast<T*>(::__shfl_sync(mask, reinterpret_cast<unsigned long long>(buffers[i]), srcLaneIdx));
             }
             this->selector = ::__shfl_sync(mask, selector, srcLaneIdx);
             this->ownsInstance = ::__shfl_sync(mask, ownsInstance, srcLaneIdx);
@@ -220,9 +232,9 @@ namespace cuSGA {
     private:
         // Double buffer implementation
         // NOTE: Uses pinned memory and linearized memory layout on the device memory
-        ::size_t size{0};
+        targetSize_t size{0};
         T* buffers[NUM_DOUBLE_BUFFERS]{nullptr};
-        ::size_t selector{0};
+        selector_t selector{0};
         bool ownsInstance{false};
         DoubleBuffer* pinned_instance{nullptr};
         DoubleBuffer* d_instance{nullptr};

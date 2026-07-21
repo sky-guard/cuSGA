@@ -6,11 +6,17 @@
 #include "PackedDNASequence.cuh"
 
 namespace cuSGA {
+    // Define node size type
+    using nodeSize_t = targetSize_t;
+
+    // Define edge size type
+    using edgeSize_t = targetSize_t;
+
     // Pangenome graph
     class PangenomeGraph {
     public:
         // Grow allocator using the expected buffers size
-        __host__ __device__ __forceinline__ static void growBuffers(KernelUtils::BumpPtrAllocator* allocator, const ::size_t numNodes, const ::size_t numEdges) {
+        __host__ __device__ __forceinline__ static void growBuffers(KernelUtils::BumpPtrAllocator* allocator, const nodeSize_t numNodes, const edgeSize_t numEdges) {
             // Grow size for sequence
             PackedDNASequence::growBuffers(allocator, numNodes);
 
@@ -26,10 +32,10 @@ namespace cuSGA {
         // Parameterized constructor
         __host__ PangenomeGraph(const ::std::string& fileName, bool ownsInstance, PangenomeGraph* pinned_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
         // Parameterized constructor
-        __host__ PangenomeGraph(const ::std::string& fileName, ::std::ifstream* file, bool ownsInstance, ::std::optional<::size_t> numNodesOptional = ::std::nullopt, ::std::optional<::size_t> numEdgesOptional = ::std::nullopt, PangenomeGraph* pinned_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
+        __host__ PangenomeGraph(const ::std::string& fileName, ::std::ifstream* file, bool ownsInstance, ::std::optional<nodeSize_t> numNodesOptional = ::std::nullopt, ::std::optional<edgeSize_t> numEdgesOptional = ::std::nullopt, PangenomeGraph* pinned_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
 
         // Pangenome graph constructor
-        __host__ __device__ __forceinline__ PangenomeGraph(const ::size_t numEdges, const PackedDNASequence& baseValues, ::size_t* const columnValues, ::size_t* const rowOffsets, const bool ownsInstance, PangenomeGraph* const pinned_instance = nullptr, PangenomeGraph* const d_instance = nullptr) : numEdges(numEdges), baseValues(baseValues), columnValues(columnValues), rowOffsets(rowOffsets), ownsInstance(ownsInstance), pinned_instance(pinned_instance), d_instance(d_instance) {}
+        __host__ __device__ __forceinline__ PangenomeGraph(const edgeSize_t numEdges, const PackedDNASequence& baseValues, nodeSize_t* const columnValues, edgeSize_t* const rowOffsets, const bool ownsInstance, PangenomeGraph* const pinned_instance = nullptr, PangenomeGraph* const d_instance = nullptr) : numEdges{numEdges}, baseValues{baseValues}, columnValues{columnValues}, rowOffsets{rowOffsets}, ownsInstance{ownsInstance}, pinned_instance{pinned_instance}, d_instance{d_instance} {}
 
         // Copy constructor
         PangenomeGraph(const PangenomeGraph& other) = default;
@@ -48,12 +54,12 @@ namespace cuSGA {
         __host__ void free() const;
 
         // Get number of nodes in the graph
-        __host__ __device__ __forceinline__ ::size_t getNumNodes() const {
+        __host__ __device__ __forceinline__ nodeSize_t getNumNodes() const {
             return baseValues.getNumBases();
         }
 
         // Get number of edges in the graph
-        __host__ __device__ __forceinline__ ::size_t getNumEdges() const {
+        __host__ __device__ __forceinline__ edgeSize_t getNumEdges() const {
             return numEdges;
         }
 
@@ -63,31 +69,24 @@ namespace cuSGA {
         }
 
         // Get DNA base value for a given node index
-        __host__ __device__ __forceinline__ DNABase getDNABase(const ::size_t nodeIdx) const {
+        __host__ __device__ __forceinline__ DNABase getDNABase(const nodeSize_t nodeIdx) const {
             return baseValues[nodeIdx];
         }
 
+        // Get neighbor for a given edge index
+        __host__ __device__ __forceinline__ nodeSize_t getNeighbor(const edgeSize_t edgeIdx) const {
+            return columnValues[edgeIdx];
+        }
+
         // Get neighbors for a given node index
-        __host__ __device__ __forceinline__ const ::size_t* getNeighbors(const ::size_t nodeIdx) const {
+        __host__ __device__ __forceinline__ edgeSize_t getNeighborsOffset(const nodeSize_t nodeIdx) const {
             // Get row offset for current node
-            const auto rowOffset{rowOffsets[nodeIdx]};
-
-            // Compute address for neighbors
-            const auto neighbors{&columnValues[rowOffset]};
-
-            return neighbors;
+            return rowOffsets[nodeIdx];
         }
 
         // Get number of neighbors for a given node index
-        __host__ __device__ __forceinline__ ::size_t getNumNeighbors(const ::size_t nodeIdx) const {
-            // Get row offsets for current node and next in the sequence
-            const auto rowOffset{rowOffsets[nodeIdx]};
-            const auto nextRowOffset{rowOffsets[nodeIdx + 1]};
-
-            // Compute number of neighbors as the difference between the two
-            const auto numNeighbors{nextRowOffset - rowOffset};
-
-            return numNeighbors;
+        __host__ __device__ __forceinline__ nodeSize_t getNumNeighbors(const nodeSize_t nodeIdx) const {
+            return rowOffsets[nodeIdx + 1] - rowOffsets[nodeIdx];
         }
 
         // Get pinned instance
@@ -119,10 +118,10 @@ namespace cuSGA {
     private:
         // CSR pangenome graph implementation
         // NOTE: Uses pinned memory and linearized memory layout on the device memory
-        ::size_t numEdges{0};
+        edgeSize_t numEdges{0};
         PackedDNASequence baseValues{};
-        ::size_t* columnValues{nullptr};
-        ::size_t* rowOffsets{nullptr};
+        nodeSize_t* columnValues{nullptr};
+        edgeSize_t* rowOffsets{nullptr};
         bool ownsInstance{false};
         PangenomeGraph* pinned_instance{nullptr};
         PangenomeGraph* d_instance{nullptr};

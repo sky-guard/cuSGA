@@ -7,7 +7,7 @@
 #include "Utils.cuh"
 
 namespace cuSGA {
-    __host__ PackedDNASequence::PackedDNASequence(const ::std::string& fileName, const bool ownsInstance, PackedDNASequence* const pinned_instanceOptional, KernelUtils::BumpPtrAllocator* const allocatorOptional) : PackedDNASequence() {
+    __host__ PackedDNASequence::PackedDNASequence(const ::std::string& fileName, const bool ownsInstance, PackedDNASequence* const pinned_instanceOptional, KernelUtils::BumpPtrAllocator* const allocatorOptional) : PackedDNASequence{} {
         // Get allocator
         KernelUtils::BumpPtrAllocator* allocator{allocatorOptional};
         KernelUtils::BumpPtrAllocator allocatorInstance{};
@@ -19,7 +19,7 @@ namespace cuSGA {
         auto file{Utils::openFile(fileName)};
 
         // Read max number of bases from file
-        ::size_t maxNumBases{0};
+        sequenceSize_t maxNumBases{0};
         if (!(file >> maxNumBases)) {
             throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", fileName)};
         }
@@ -50,7 +50,7 @@ namespace cuSGA {
         this->ownsInstance = ownsInstance;
     }
 
-    __host__ PackedDNASequence::PackedDNASequence(const ::std::string& fileName, ::std::ifstream* const file, const bool ownsInstance, ::std::optional<::size_t> numBasesOptional, PackedDNASequence* const pinned_instanceOptional, KernelUtils::BumpPtrAllocator* const allocatorOptional) : PackedDNASequence(0, 0, nullptr, ownsInstance, pinned_instanceOptional) {
+    __host__ PackedDNASequence::PackedDNASequence(const ::std::string& fileName, ::std::ifstream* const file, const bool ownsInstance, ::std::optional<sequenceSize_t> numBasesOptional, PackedDNASequence* const pinned_instanceOptional, KernelUtils::BumpPtrAllocator* const allocatorOptional) : PackedDNASequence{0, 0, nullptr, ownsInstance, pinned_instanceOptional} {
         // Get allocator
         KernelUtils::BumpPtrAllocator* allocator{allocatorOptional};
         KernelUtils::BumpPtrAllocator allocatorInstance{};
@@ -60,7 +60,7 @@ namespace cuSGA {
 
         // Read number of bases from file if missing
         if (!numBasesOptional.has_value()) {
-            ::size_t numBases{0};
+            sequenceSize_t numBases{0};
             if (!(*file >> numBases)) {
                 throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", fileName)};
             }
@@ -87,7 +87,7 @@ namespace cuSGA {
         this->bases = allocator->emplaceReserve<::std::remove_reference_t<decltype(bases[0])>>(numChunks);
 
         // Read base values from file
-        for (::size_t i{0}; i < numBases; ++i) {
+        for (sequenceSize_t i{0}; i < numBases; ++i) {
             // Read character from file
             char c{'\0'};
             if (!(*file >> c)) {
@@ -175,7 +175,7 @@ namespace cuSGA {
 
     __host__ bool PackedDNASequence::readFromFile(const ::std::string& fileName, ::std::ifstream* const file) const {
         // Read number of bases from file
-        ::size_t numBases{0};
+        sequenceSize_t numBases{0};
         if (!(*file >> numBases)) {
             // Check EOF
             if (file->eof()) {
@@ -187,7 +187,7 @@ namespace cuSGA {
         }
 
         // Read base values from file
-        for (::size_t i{0}; i < numBases; ++i) {
+        for (sequenceSize_t i{0}; i < numBases; ++i) {
             // Read character from file
             char c{'\0'};
             if (!(*file >> c)) {

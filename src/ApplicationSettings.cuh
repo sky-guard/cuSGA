@@ -68,7 +68,7 @@ namespace cuSGA::ApplicationSettings {
             // Deduce file names
             connectedComponentsFileNamesVector.resize(NUM_BASES);
 #pragma unroll
-            for (::size_t i = 0; i < NUM_BASES; ++i) {
+            for (DNABase_t i = 0; i < NUM_BASES; ++i) {
                 connectedComponentsFileNamesVector[i] = prefix + CONNECTED_COMPONENTS_FILE_NAME_SUFFIXES[i];
             }
         }
@@ -79,7 +79,7 @@ namespace cuSGA::ApplicationSettings {
 
         // Move over connected components file names data
 #pragma unroll
-        for (::size_t i{0}; i < NUM_BASES; ++i) {
+        for (DNABase_t i{0}; i < NUM_BASES; ++i) {
             parsedArguments.connectedComponentsFileNames[i] = ::std::move(connectedComponentsFileNamesVector[i]);
         }
 

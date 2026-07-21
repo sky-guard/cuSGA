@@ -1,7 +1,9 @@
 #include "Frontier.cuh"
 
+#include <stdexcept>
+
 namespace cuSGA {
-    __host__ Frontier::Frontier(const ::size_t size, const bool ownsInstance, Frontier* const pinned_instanceOptional, KernelUtils::BumpPtrAllocator* const allocatorOptional) : Frontier(0, 0, DoubleBuffer<::size_t>{}, nullptr, ownsInstance, pinned_instanceOptional) {
+    __host__ Frontier::Frontier(const targetSize_t size, const bool ownsInstance, Frontier* const pinned_instanceOptional, KernelUtils::BumpPtrAllocator* const allocatorOptional) : Frontier{0, 0, DoubleBuffer<nodeSize_t>{}, nullptr, ownsInstance, pinned_instanceOptional} {
         // Get allocator
         KernelUtils::BumpPtrAllocator* allocator{allocatorOptional};
         KernelUtils::BumpPtrAllocator allocatorInstance{};

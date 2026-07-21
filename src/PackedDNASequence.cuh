@@ -9,19 +9,22 @@
 #include "Utils.cuh"
 
 namespace cuSGA {
+    // Define pack type
+    using pack_t = ::uint32_t;
+
+    // Define sequence size type
+    using sequenceSize_t = targetSize_t;
+
     // Packed DNA sequence
     class PackedDNASequence {
     public:
-        // Define packing type
-        using pack_t = ::uint64_t;
-
         // Packed sequence related constants
-        static constexpr ::size_t DNA_BASE_BIT_SIZE{2};
+        static constexpr ::uint8_t DNA_BASE_BIT_SIZE{2};
         static constexpr pack_t DNA_BASE_BITMASK{(1 << DNA_BASE_BIT_SIZE) - 1};
-        static constexpr ::size_t PACKING_FACTOR{(sizeof(pack_t) * Utils::BYTE_SIZE) / DNA_BASE_BIT_SIZE};
+        static constexpr ::uint8_t PACKING_FACTOR{(sizeof(pack_t) * Utils::BYTE_SIZE) / DNA_BASE_BIT_SIZE};
 
         // Grow allocator using the expected buffers size
-        __host__ __device__ __forceinline__ static void growBuffers(KernelUtils::BumpPtrAllocator* const allocator, const ::size_t numBases) {
+        __host__ __device__ __forceinline__ static void growBuffers(KernelUtils::BumpPtrAllocator* const allocator, const sequenceSize_t numBases) {
             // Grow size for bases
             const auto numChunks{(numBases + PACKING_FACTOR - 1) / PACKING_FACTOR};
             allocator->grow<::std::remove_reference_t<decltype(bases[0])>>(numChunks);
@@ -32,10 +35,10 @@ namespace cuSGA {
         // Parameterized constructor
         __host__ PackedDNASequence(const ::std::string& fileName, bool ownsInstance, PackedDNASequence* pinned_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
         // Parameterized constructor
-        __host__ PackedDNASequence(const ::std::string& fileName, ::std::ifstream* file, bool ownsInstance, ::std::optional<::size_t> numBasesOptional = ::std::nullopt, PackedDNASequence* pinned_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
+        __host__ PackedDNASequence(const ::std::string& fileName, ::std::ifstream* file, bool ownsInstance, ::std::optional<sequenceSize_t> numBasesOptional = ::std::nullopt, PackedDNASequence* pinned_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
 
         // Parameterized constructor
-        __host__ __device__ __forceinline__ PackedDNASequence(const ::size_t numBases, const ::size_t numChunks, pack_t* const bases, const bool ownsInstance, PackedDNASequence* const pinned_instance = nullptr, PackedDNASequence* const d_instance = nullptr) : numBases(numBases), numChunks(numChunks), bases(bases), ownsInstance(ownsInstance), pinned_instance(pinned_instance), d_instance(d_instance) {}
+        __host__ __device__ __forceinline__ PackedDNASequence(const sequenceSize_t numBases, const sequenceSize_t numChunks, pack_t* const bases, const bool ownsInstance, PackedDNASequence* const pinned_instance = nullptr, PackedDNASequence* const d_instance = nullptr) : numBases{numBases}, numChunks{numChunks}, bases{bases}, ownsInstance{ownsInstance}, pinned_instance{pinned_instance}, d_instance{d_instance} {}
 
         // Copy constructor
         PackedDNASequence(const PackedDNASequence& other) = default;
@@ -54,12 +57,12 @@ namespace cuSGA {
         __host__ void free() const;
 
         // Get number of bases
-        __host__ __device__ __forceinline__::size_t getNumBases() const {
+        __host__ __device__ __forceinline__ sequenceSize_t getNumBases() const {
             return numBases;
         }
 
         // Get number of chunks
-        __host__ __device__ __forceinline__ ::size_t getNumChunks() const {
+        __host__ __device__ __forceinline__ sequenceSize_t getNumChunks() const {
             return numChunks;
         }
 
@@ -69,14 +72,8 @@ namespace cuSGA {
             const auto chunkIdx{idx / PACKING_FACTOR};
             const auto bitOffset{(idx % PACKING_FACTOR) * DNA_BASE_BIT_SIZE};
 
-            // Get packed bases chunk
-            const auto chunk{bases[chunkIdx]};
-
-            // Shift and mask to get the 2 LSBs
-            const auto baseBits{(chunk >> bitOffset) & DNA_BASE_BITMASK};
-
-            // Cast bits to DNA base
-            const auto base{static_cast<DNABase>(baseBits)};
+            // Get chunk, shift bits and extract using mask
+            const auto base{static_cast<DNABase>((bases[chunkIdx] >> bitOffset) & DNA_BASE_BITMASK)};
 
             return base;
         }
@@ -112,8 +109,8 @@ namespace cuSGA {
     private:
         // Bit packed sequence implementation
         // NOTE: Uses pinned memory and linearized memory layout on the device memory
-        ::size_t numBases{0};
-        ::size_t numChunks{0};
+        sequenceSize_t numBases{0};
+        sequenceSize_t numChunks{0};
         pack_t* bases{nullptr};
         bool ownsInstance{false};
         PackedDNASequence* pinned_instance{nullptr};
