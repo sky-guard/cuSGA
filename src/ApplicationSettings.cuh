@@ -7,25 +7,25 @@
 
 namespace cuSGA::ApplicationSettings {
     // Application name
-    constexpr auto APP_NAME{"cuSGA"};
-    constexpr auto APP_DESCRIPTION{"A CUDA-native implementation of the ParSGA Algorithm for DNA Sequence to Graph Alignment!"};
+    inline constexpr auto APP_NAME{"cuSGA"};
+    inline constexpr auto APP_DESCRIPTION{"A CUDA-native implementation of the ParSGA Algorithm for DNA Sequence to Graph Alignment!"};
 
     // Application version
-    constexpr auto VERSION_FLAG{"-v,--version"};
-    constexpr auto APP_VERSION{"1.0"};
+    inline constexpr auto VERSION_FLAG{"-v,--version"};
+    inline constexpr auto APP_VERSION{"1.0"};
 
     // Sequence file name
-    constexpr auto SEQUENCE_FILE_NAME_FLAG{"-s,--sequence"};
-    constexpr auto SEQUENCE_FILE_NAME_DESCRIPTION{"The path to the file containing the DNA Sequence to align."};
+    inline constexpr auto SEQUENCE_FILE_NAME_FLAG{"-s,--sequence"};
+    inline constexpr auto SEQUENCE_FILE_NAME_DESCRIPTION{"The path to the file containing the DNA Sequence to align."};
 
     // Pangenome graph file name
-    constexpr auto PANGENOME_GRAPH_FILE_NAME_FLAG{"-p,--pangenome-graph"};
-    constexpr auto PANGENOME_GRAPH_FILE_NAME_DESCRIPTION{"The path to the file containing the CSR representation of the Pangenome Graph to align to."};
+    inline constexpr auto PANGENOME_GRAPH_FILE_NAME_FLAG{"-p,--pangenome-graph"};
+    inline constexpr auto PANGENOME_GRAPH_FILE_NAME_DESCRIPTION{"The path to the file containing the CSR representation of the Pangenome Graph to align to."};
 
     // Connected components file names
-    constexpr auto CONNECTED_COMPONENTS_FILE_NAMES_FLAG{"-cc,--connected-components"};
-    constexpr auto CONNECTED_COMPONENTS_FILE_NAMES_DESCRIPTION{"The paths to the files containing the Connected Components of the Character Graphs for the given Pangenome Graph. The common prefix of the file names is also sufficient and cuSGA will automatically look for files with the following names: $PREFIX-components-{A, C, G, T}."};
-    constexpr ::std::string CONNECTED_COMPONENTS_FILE_NAME_SUFFIXES[]{"-components-A", "-components-C", "-components-G", "-components-T"};
+    inline constexpr auto CONNECTED_COMPONENTS_FILE_NAMES_FLAG{"-cc,--connected-components"};
+    inline constexpr auto CONNECTED_COMPONENTS_FILE_NAMES_DESCRIPTION{"The paths to the files containing the Connected Components of the Character Graphs for the given Pangenome Graph. The common prefix of the file names is also sufficient and cuSGA will automatically look for files with the following names: $PREFIX-components-{A, C, G, T}."};
+    inline constexpr ::std::string CONNECTED_COMPONENTS_FILE_NAME_SUFFIXES[]{"-components-A", "-components-C", "-components-G", "-components-T"};
 
     // Parsed arguments struct
     struct ParsedArguments {

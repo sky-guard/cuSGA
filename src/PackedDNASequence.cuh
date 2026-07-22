@@ -20,7 +20,7 @@ namespace cuSGA {
     public:
         // Packed sequence related constants
         static constexpr ::uint8_t DNA_BASE_BIT_SIZE{2};
-        static constexpr pack_t DNA_BASE_BITMASK{(1 << DNA_BASE_BIT_SIZE) - 1};
+        static constexpr pack_t DNA_BASE_BITMASK{(1u << DNA_BASE_BIT_SIZE) - 1};
         static constexpr ::uint8_t PACKING_FACTOR{(sizeof(pack_t) * Utils::BYTE_SIZE) / DNA_BASE_BIT_SIZE};
 
         // Grow allocator using the expected buffers size
