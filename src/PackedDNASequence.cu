@@ -102,7 +102,7 @@ namespace cuSGA {
             const auto bitOffset{(i % PACKING_FACTOR) * DNA_BASE_BIT_SIZE};
 
             // Pack into the pack_t
-            bases[chunkIdx] |= static_cast<pack_t>(base) << bitOffset;
+            bases[chunkIdx] |= static_cast<sequencePack_t>(base) << bitOffset;
         }
     }
 
@@ -207,7 +207,7 @@ namespace cuSGA {
             }
 
             // Pack into the pack_t
-            bases[chunkIdx] |= static_cast<pack_t>(base) << bitOffset;
+            bases[chunkIdx] |= static_cast<sequencePack_t>(base) << bitOffset;
         }
 
         // Update device instance

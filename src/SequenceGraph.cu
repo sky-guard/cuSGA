@@ -300,11 +300,11 @@ namespace cuSGA {
             // Get insertion offset and check if inserting in shared or global frontier
             if (const auto insertionOffset{::__popc(improvedMask & ((1u << laneIdx) - 1))}; insertionOffset < numInsertionsInSharedFrontier) {
                 // Insert node into next shared frontier
-                shared_frontier->insertInQueue(neighborIdx, shared_frontier->getQueueSize() + insertionOffset);
+                shared_frontier->atomicInsertNodeInQueue(neighborIdx, shared_frontier->getQueueSize() + insertionOffset);
             }
             else {
                 // Insert node into next global frontier
-                warpFrontier->insertInQueue(neighborIdx, warpFrontier->getQueueSize() + insertionOffset - numInsertionsInSharedFrontier);
+                warpFrontier->atomicInsertNodeInQueue(neighborIdx, warpFrontier->getQueueSize() + insertionOffset - numInsertionsInSharedFrontier);
             }
         }
 
@@ -317,7 +317,7 @@ namespace cuSGA {
         // Shared memory, partitioned in the following way to guarantee alignment without wasting any space:
         //      |  buffers (nodeSize_t)  |  isInQueue (bool)  |
         extern __shared__ nodeSize_t shared_buffers[];
-        const auto shared_isInQueue{reinterpret_cast<bool*>(shared_buffers + numWarpsPerBlock * SHARED_FRONTIER_BUFFER_SIZE)};
+        const auto shared_isInQueue{shared_buffers + numWarpsPerBlock * SHARED_FRONTIER_BUFFER_SIZE};
 
         // Get thread warp ID and check for thread overflow
         if (const auto warpID{(::blockIdx.x * ::blockDim.x + ::threadIdx.x) >> KernelUtils::WARP_SHIFT}; warpID < d_sequenceGraph.getNumConnectedComponents(sequenceBase)) {
@@ -329,20 +329,17 @@ namespace cuSGA {
             const auto connectedComponentStart{d_sequenceGraph.getConnectedComponentOffset(sequenceBase, warpID)};
             const auto connectedComponentEnd{d_sequenceGraph.getConnectedComponentOffset(sequenceBase, warpID + 1)};
             const auto connectedComponentSize{connectedComponentEnd - connectedComponentStart};
+            const auto packedQueueSize{(maxConnectedComponentSize + Frontier::QUEUE_PACKING_FACTOR - 1) >> Frontier::QUEUE_PACK_SHIFT};
 
             // Get shared frontier
             const auto shared_buffersBase{shared_buffers + ((warpIdx * SHARED_FRONTIER_BUFFER_SIZE) << 1)};
             const DoubleBuffer shared_doubleBuffer{SHARED_FRONTIER_BUFFER_SIZE, shared_buffersBase, shared_buffersBase + SHARED_FRONTIER_BUFFER_SIZE, 0, false};
-            Frontier shared_frontier{0, 0, shared_doubleBuffer, shared_isInQueue + warpIdx * connectedComponentSize, true};
+            Frontier shared_frontier{0, 0, shared_doubleBuffer, shared_isInQueue + warpIdx * packedQueueSize, true};
 
             // Get warp frontier
             const auto d_buffersBase{d_buffers + (connectedComponentStart << 1)};
             const DoubleBuffer warpDoubleBuffer{connectedComponentSize, d_buffersBase, d_buffersBase + connectedComponentSize, 0, false};
-            Frontier warpFrontier{0, 0, warpDoubleBuffer, shared_isInQueue + warpIdx * connectedComponentSize, true};
-
-            // Get chunked queue size and tail
-            const auto chunkedQueueSize{warpFrontier.getMaxSize() >> ::__ffs(sizeof(queueChunk_t))};
-            const auto chunkedQueueTail{warpFrontier.getMaxSize() & (sizeof(queueChunk_t) - 1)};
+            Frontier warpFrontier{0, 0, warpDoubleBuffer, shared_isInQueue + warpIdx * packedQueueSize, true};
 
             // Perform insertions
             // Visit all neighbors of nodes in the current connected component (using stride access)
@@ -374,12 +371,9 @@ namespace cuSGA {
 
             // Perform propagations
             while (!(shared_frontier.isEmpty() && warpFrontier.isEmpty())) {
-                // Empty frontier queue (using 128 bit / 16 bytes chunks) if necessary
-                for (nodeSize_t queueChunkIdx{laneIdx}; queueChunkIdx < chunkedQueueSize; queueChunkIdx += KernelUtils::WARP_SIZE) {
-                    reinterpret_cast<queueChunk_t*>(warpFrontier.getIsInQueue())[queueChunkIdx] = ::make_uint4(0, 0, 0, 0);
-                }
-                for (auto queueIdx{chunkedQueueTail}; queueIdx < warpFrontier.getMaxSize(); queueIdx += KernelUtils::WARP_SIZE) {
-                    warpFrontier.getIsInQueue()[queueIdx] = false;
+                // Empty frontier queue if necessary
+                for (nodeSize_t queuePackIdx{laneIdx}; queuePackIdx < packedQueueSize; queuePackIdx += KernelUtils::WARP_SIZE) {
+                    warpFrontier.getIsInQueue()[queuePackIdx] = 0;
                 }
 
                 // Visit all neighbors of nodes in the current shared frontier (using stride access)

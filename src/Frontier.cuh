@@ -4,19 +4,25 @@
 #include "PangenomeGraph.cuh"
 
 namespace cuSGA {
-    // Define queue chunk type
-    using queueChunk_t = ::uint4;
+    // Define queue pack type
+    using queuePack_t = ::uint32_t;
 
     // Frontier
     class Frontier {
     public:
+        // Frontier related constants
+        static constexpr ::uint8_t QUEUE_FLAG_BIT_SIZE{1};
+        static constexpr ::uint8_t QUEUE_PACKING_FACTOR{(sizeof(queuePack_t) * Utils::BYTE_SIZE) / QUEUE_FLAG_BIT_SIZE};
+        static constexpr ::uint8_t QUEUE_PACK_SHIFT{::std::countr_zero(sizeof(queuePack_t) * Utils::BYTE_SIZE)};
+
         // Grow allocator using the expected buffers size
         __host__ __device__ __forceinline__ static void growBuffers(KernelUtils::BumpPtrAllocator* const allocator, const nodeSize_t size) {
             // Grow size for double buffer
             DoubleBuffer<nodeSize_t>::growBuffers(allocator, size);
 
             // Grow size for isInQueue
-            allocator->grow<::std::remove_reference_t<decltype(isInQueue[0])>>(size);
+            const auto numChunks{(size + QUEUE_PACKING_FACTOR - 1) >> QUEUE_PACK_SHIFT};
+            allocator->grow<::std::remove_reference_t<decltype(isInQueue[0])>>(numChunks);
         }
 
         // Default constructor
@@ -25,7 +31,7 @@ namespace cuSGA {
         __host__ Frontier(nodeSize_t size, bool ownsInstance, Frontier* pinned_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
 
         // Parameterized constructor
-        __host__ __device__ __forceinline__ Frontier(const nodeSize_t currentSize, const nodeSize_t alternateSize, const DoubleBuffer<nodeSize_t>& doubleBuffer, bool* const isInQueue, const bool ownsInstance, Frontier* const pinned_instance = nullptr, Frontier* const d_instance = nullptr) : currentSize{currentSize}, alternateSize{alternateSize}, doubleBuffer{doubleBuffer}, isInQueue{isInQueue}, ownsInstance{ownsInstance}, pinned_instance{pinned_instance}, d_instance{d_instance} {}
+        __host__ __device__ __forceinline__ Frontier(const nodeSize_t currentSize, const nodeSize_t alternateSize, const DoubleBuffer<nodeSize_t>& doubleBuffer, queuePack_t* const isInQueue, const bool ownsInstance, Frontier* const pinned_instance = nullptr, Frontier* const d_instance = nullptr) : currentSize{currentSize}, alternateSize{alternateSize}, doubleBuffer{doubleBuffer}, isInQueue{isInQueue}, ownsInstance{ownsInstance}, pinned_instance{pinned_instance}, d_instance{d_instance} {}
 
         // Copy constructor
         Frontier(const Frontier& other) = default;
@@ -79,7 +85,7 @@ namespace cuSGA {
         }
 
         // Get isInQueue array
-        __host__ __device__ __forceinline__ bool* getIsInQueue() const {
+        __host__ __device__ __forceinline__ queuePack_t* getIsInQueue() const {
             return isInQueue;
         }
 
@@ -100,7 +106,11 @@ namespace cuSGA {
 
         // Check if given node is in queue
         __host__ __device__ __forceinline__ bool isNodeInQueue(const nodeSize_t nodeIdx) const {
-            return isInQueue[nodeIdx];
+            // Get pack index and bitmask
+            const auto packIdx = nodeIdx >> QUEUE_PACK_SHIFT;
+            const auto bitmask = 1u << (nodeIdx & (sizeof(queuePack_t) * Utils::BYTE_SIZE - 1));
+
+            return (isInQueue[packIdx] & bitmask) != 0;
         }
 
         // Set frontier size
@@ -142,8 +152,27 @@ namespace cuSGA {
 
         // Insert a node into the current frontier queue
         __host__ __device__ __forceinline__ void insertInQueue(const nodeSize_t nodeIdx, const nodeSize_t queueIdx) const {
+            // Update double buffer
             doubleBuffer.alternate()[queueIdx] = nodeIdx;
-            isInQueue[nodeIdx] = true;
+
+            // Get pack index and bitmask
+            const auto packIdx = nodeIdx >> QUEUE_PACK_SHIFT;
+            const auto bitmask = 1u << (nodeIdx & (sizeof(queuePack_t) * Utils::BYTE_SIZE - 1));
+
+            // Perform OR to set the bit
+            isInQueue[packIdx] |= bitmask;
+        }
+
+        __device__ __forceinline__ void atomicInsertNodeInQueue(const nodeSize_t nodeIdx, const nodeSize_t queueIdx) const {
+            // Update double buffer
+            doubleBuffer.alternate()[queueIdx] = nodeIdx;
+
+            // Get pack index and bitmask
+            const auto packIdx = nodeIdx >> QUEUE_PACK_SHIFT;
+            const auto bitMask = 1u << (nodeIdx & (sizeof(queuePack_t) * Utils::BYTE_SIZE - 1));
+
+            // Perform atomic OR to set bit
+            ::atomicOr(&isInQueue[packIdx], bitMask);
         }
 
         // Swap from queue to next frontier
@@ -166,7 +195,8 @@ namespace cuSGA {
             this->alternateSize = 0;
 
             // Clear isInQueue
-            ::memset(isInQueue, false, doubleBuffer.getSize() * sizeof(isInQueue[0]));
+            const auto numChunks{(doubleBuffer.getSize() + QUEUE_PACKING_FACTOR - 1) >> QUEUE_PACK_SHIFT};
+            ::memset(isInQueue, false, numChunks * sizeof(isInQueue[0]));
         }
 
         // Swap from device queue to next device frontier
@@ -180,7 +210,8 @@ namespace cuSGA {
                 pinned_instance->alternateSize = 0;
 
                 // Clear isInQueue
-                CUDA_CHECK(::cudaMemsetAsync(pinned_instance->isInQueue, false, doubleBuffer.getSize() * sizeof(isInQueue[0]), cudaStreamDefault));
+                const auto numChunks{(doubleBuffer.getSize() + QUEUE_PACKING_FACTOR - 1) >> QUEUE_PACK_SHIFT};
+                CUDA_CHECK(::cudaMemsetAsync(pinned_instance->isInQueue, false, numChunks * sizeof(isInQueue[0]), cudaStreamDefault));
 
                 // Update device instance
                 CUDA_CHECK(::cudaMemcpyAsync(d_instance, pinned_instance, sizeof(Frontier), ::cudaMemcpyHostToDevice, cudaStreamDefault));
@@ -194,7 +225,8 @@ namespace cuSGA {
             this->alternateSize = 0;
 
             // Clear isInQueue
-            ::memset(isInQueue, false, doubleBuffer.getSize() * sizeof(isInQueue[0]));
+            const auto numChunks{(doubleBuffer.getSize() + QUEUE_PACKING_FACTOR - 1) >> QUEUE_PACK_SHIFT};
+            ::memset(isInQueue, false, numChunks * sizeof(isInQueue[0]));
         }
 
         // Empty device frontier
@@ -205,7 +237,8 @@ namespace cuSGA {
                 pinned_instance->alternateSize = 0;
 
                 // Clear isInQueue
-                CUDA_CHECK(::cudaMemsetAsync(pinned_instance->isInQueue, 0, doubleBuffer.getSize() * sizeof(isInQueue[0]), cudaStreamDefault));
+                const auto numChunks{(doubleBuffer.getSize() + QUEUE_PACKING_FACTOR - 1) >> QUEUE_PACK_SHIFT};
+                CUDA_CHECK(::cudaMemsetAsync(pinned_instance->isInQueue, 0, numChunks * sizeof(isInQueue[0]), cudaStreamDefault));
 
                 // Update device instance
                 CUDA_CHECK(::cudaMemcpyAsync(d_instance, pinned_instance, sizeof(Frontier), ::cudaMemcpyHostToDevice, cudaStreamDefault));
@@ -229,7 +262,7 @@ namespace cuSGA {
         nodeSize_t currentSize{0};
         nodeSize_t alternateSize{0};
         DoubleBuffer<nodeSize_t> doubleBuffer{};
-        bool* isInQueue{nullptr};
+        queuePack_t* isInQueue{nullptr};
         bool ownsInstance{false};
         Frontier* pinned_instance{nullptr};
         Frontier* d_instance{nullptr};

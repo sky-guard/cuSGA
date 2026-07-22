@@ -10,7 +10,7 @@
 
 namespace cuSGA {
     // Define pack type
-    using pack_t = ::uint32_t;
+    using sequencePack_t = ::uint32_t;
 
     // Define sequence size type
     using sequenceSize_t = targetSize_t;
@@ -20,8 +20,8 @@ namespace cuSGA {
     public:
         // Packed sequence related constants
         static constexpr ::uint8_t DNA_BASE_BIT_SIZE{2};
-        static constexpr pack_t DNA_BASE_BITMASK{(1u << DNA_BASE_BIT_SIZE) - 1};
-        static constexpr ::uint8_t PACKING_FACTOR{(sizeof(pack_t) * Utils::BYTE_SIZE) / DNA_BASE_BIT_SIZE};
+        static constexpr sequencePack_t DNA_BASE_BITMASK{(1u << DNA_BASE_BIT_SIZE) - 1};
+        static constexpr ::uint8_t PACKING_FACTOR{(sizeof(sequencePack_t) * Utils::BYTE_SIZE) / DNA_BASE_BIT_SIZE};
 
         // Grow allocator using the expected buffers size
         __host__ __device__ __forceinline__ static void growBuffers(KernelUtils::BumpPtrAllocator* const allocator, const sequenceSize_t numBases) {
@@ -38,7 +38,7 @@ namespace cuSGA {
         __host__ PackedDNASequence(const ::std::string& fileName, ::std::ifstream* file, bool ownsInstance, ::std::optional<sequenceSize_t> numBasesOptional = ::std::nullopt, PackedDNASequence* pinned_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
 
         // Parameterized constructor
-        __host__ __device__ __forceinline__ PackedDNASequence(const sequenceSize_t numBases, const sequenceSize_t numChunks, pack_t* const bases, const bool ownsInstance, PackedDNASequence* const pinned_instance = nullptr, PackedDNASequence* const d_instance = nullptr) : numBases{numBases}, numChunks{numChunks}, bases{bases}, ownsInstance{ownsInstance}, pinned_instance{pinned_instance}, d_instance{d_instance} {}
+        __host__ __device__ __forceinline__ PackedDNASequence(const sequenceSize_t numBases, const sequenceSize_t numChunks, sequencePack_t* const bases, const bool ownsInstance, PackedDNASequence* const pinned_instance = nullptr, PackedDNASequence* const d_instance = nullptr) : numBases{numBases}, numChunks{numChunks}, bases{bases}, ownsInstance{ownsInstance}, pinned_instance{pinned_instance}, d_instance{d_instance} {}
 
         // Copy constructor
         PackedDNASequence(const PackedDNASequence& other) = default;
@@ -111,7 +111,7 @@ namespace cuSGA {
         // NOTE: Uses pinned memory and linearized memory layout on the device memory
         sequenceSize_t numBases{0};
         sequenceSize_t numChunks{0};
-        pack_t* bases{nullptr};
+        sequencePack_t* bases{nullptr};
         bool ownsInstance{false};
         PackedDNASequence* pinned_instance{nullptr};
         PackedDNASequence* d_instance{nullptr};
