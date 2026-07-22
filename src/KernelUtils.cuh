@@ -95,11 +95,6 @@ namespace cuSGA::KernelUtils {
         // Destructor
         ~BumpPtrAllocator() = default;
 
-        // Get initial alignment
-        __host__ __device__ __forceinline__ targetSize_t getMaxAlignment() const {
-            return maxAlignment;
-        }
-
         // Get size
         __host__ __device__ __forceinline__ targetSize_t getSize() const {
             return size;
@@ -161,9 +156,6 @@ namespace cuSGA::KernelUtils {
 
             // Set size to new size
             this->size = newSize;
-
-            // Update max alignment
-            this->maxAlignment = (typeAlignment > maxAlignment) ? typeAlignment : maxAlignment;
         }
 
         // Emplace using constructor and bump pointer
@@ -296,64 +288,59 @@ namespace cuSGA::KernelUtils {
         // Initialize using host memory
         __host__ __forceinline__ void initHostMem() {
             // Malloc memory
-            void* h_ptr{::malloc(size + maxAlignment)};
+            void* h_ptr{::malloc(size)};
 
             // Set and align pointer
-            this->ptr = align(reinterpret_cast<::uintptr_t>(h_ptr), maxAlignment);
+            this->ptr = reinterpret_cast<::uintptr_t>(h_ptr);
         }
 
         // Initialize using host pinned memory
         __host__ __forceinline__ void initHostPinnedMem() {
             // Cuda malloc host
             void* pinned_ptr{nullptr};
-            CUDA_CHECK(::cudaMallocHost(&pinned_ptr, size + maxAlignment));
+            CUDA_CHECK(::cudaMallocHost(&pinned_ptr, size));
 
-            // Set and align pointer
-            this->ptr = align(reinterpret_cast<::uintptr_t>(pinned_ptr), maxAlignment);
+            // Set pointer
+            this->ptr = reinterpret_cast<::uintptr_t>(pinned_ptr);
         }
 
         // Initialize using device global memory
         __host__ __device__ __forceinline__ void initCudaGMem() {
             // Cuda malloc memory
             void* d_ptr{nullptr};
-            CUDA_CHECK(::cudaMalloc(&d_ptr, size + maxAlignment));
+            CUDA_CHECK(::cudaMalloc(&d_ptr, size));
 
-            // Set and align pointer
-            this->ptr = align(reinterpret_cast<::uintptr_t>(d_ptr), maxAlignment);
+            // Set pointer
+            this->ptr = reinterpret_cast<::uintptr_t>(d_ptr);
         }
 
         // Initialize asynchronously using device global memory
         __host__ __device__ __forceinline__ void initCudaGMemAsync(const cudaStream_t& stream = cudaStreamDefault) {
             // Cuda malloc memory
             void* d_ptr{nullptr};
-            CUDA_CHECK(::cudaMallocAsync(&d_ptr, size + maxAlignment, stream));
+            CUDA_CHECK(::cudaMallocAsync(&d_ptr, size, stream));
 
-            // Set and align pointer
-            this->ptr = align(reinterpret_cast<::uintptr_t>(d_ptr), maxAlignment);
+            // Set pointer
+            this->ptr = reinterpret_cast<::uintptr_t>(d_ptr);
         }
 
         // Initialize using device shared memory
         __device__ __forceinline__ void initCudaSMem(const targetSize_t maxAlignment, const targetSize_t sharedMemSize, const ::uintptr_t sharedMemPtr) {
-            // Set max alignment
-            this->maxAlignment = maxAlignment;
-
             // Set size to the allocated shared memory size
             this->size = sharedMemSize;
 
-            // Set and align pointer to the already allocated shared memory
-            this->ptr = align(sharedMemPtr, maxAlignment);
+            // Set pointer to the already allocated shared memory
+            this->ptr = sharedMemPtr;
         }
 
         // Shuffle object from the given lane, with the given mask
         __device__ __forceinline__ void shuffle_sync(const unsigned mask, const int srcLaneIdx) {
-            this->maxAlignment = ::__shfl_sync(mask, maxAlignment, srcLaneIdx);
             this->size = ::__shfl_sync(mask, size, srcLaneIdx);
             this->ptr = ::__shfl_sync(mask, ptr, srcLaneIdx);
         }
 
     private:
         // Bump pointer allocator implementation
-        targetSize_t maxAlignment{0};
         targetSize_t size{0};
         ::uintptr_t ptr{0};
 

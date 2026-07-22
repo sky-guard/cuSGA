@@ -313,13 +313,11 @@ namespace cuSGA {
         warpFrontier->growQueueSize(numInsertionsInGlobalFrontier);
     }
 
-    __global__ void SequenceGraphKernels::insertionsAndPropagations(const SequenceGraph d_sequenceGraph, const DNABase sequenceBase, const connectedComponentSize_t maxConnectedComponentSize, nodeSize_t* const d_buffers) { // NOLINT
-        // Shared memory array to store frontier isInQueue
-        extern __shared__ bool shared_isInQueue[];
-
-        // Shared memory arrays to store frontier buffers
-        __shared__ nodeSize_t shared_frontierCurrentBuffer[SHARED_FRONTIER_BUFFER_SIZE];
-        __shared__ nodeSize_t shared_frontierAlternateBuffer[SHARED_FRONTIER_BUFFER_SIZE];
+    __global__ void SequenceGraphKernels::insertionsAndPropagations(const SequenceGraph d_sequenceGraph, const DNABase sequenceBase, const targetSize_t numWarpsPerBlock, const connectedComponentSize_t maxConnectedComponentSize, nodeSize_t* const d_buffers) { // NOLINT
+        // Shared memory, partitioned in the following way to guarantee alignment without wasting any space:
+        //      |  buffers (nodeSize_t)  |  isInQueue (bool)  |
+        extern __shared__ nodeSize_t shared_buffers[];
+        const auto shared_isInQueue{reinterpret_cast<bool*>(shared_buffers + numWarpsPerBlock * SHARED_FRONTIER_BUFFER_SIZE)};
 
         // Get thread warp ID and check for thread overflow
         if (const auto warpID{(::blockIdx.x * ::blockDim.x + ::threadIdx.x) >> KernelUtils::WARP_SHIFT}; warpID < d_sequenceGraph.getNumConnectedComponents(sequenceBase)) {
@@ -333,13 +331,14 @@ namespace cuSGA {
             const auto connectedComponentSize{connectedComponentEnd - connectedComponentStart};
 
             // Get shared frontier
-            const DoubleBuffer shared_doubleBuffer{SHARED_FRONTIER_BUFFER_SIZE, shared_frontierCurrentBuffer, shared_frontierAlternateBuffer, 0, false};
-            Frontier shared_frontier{0, 0, shared_doubleBuffer, shared_isInQueue + warpIdx * connectedComponentSize * sizeof(bool), true};
+            const auto shared_buffersBase{shared_buffers + ((warpIdx * SHARED_FRONTIER_BUFFER_SIZE) << 1)};
+            const DoubleBuffer shared_doubleBuffer{SHARED_FRONTIER_BUFFER_SIZE, shared_buffersBase, shared_buffersBase + SHARED_FRONTIER_BUFFER_SIZE, 0, false};
+            Frontier shared_frontier{0, 0, shared_doubleBuffer, shared_isInQueue + warpIdx * connectedComponentSize, true};
 
             // Get warp frontier
             const auto d_buffersBase{d_buffers + (connectedComponentStart << 1)};
             const DoubleBuffer warpDoubleBuffer{connectedComponentSize, d_buffersBase, d_buffersBase + connectedComponentSize, 0, false};
-            Frontier warpFrontier{0, 0, warpDoubleBuffer, shared_isInQueue + warpIdx * connectedComponentSize * sizeof(bool), true};
+            Frontier warpFrontier{0, 0, warpDoubleBuffer, shared_isInQueue + warpIdx * connectedComponentSize, true};
 
             // Get chunked queue size and tail
             const auto chunkedQueueSize{warpFrontier.getMaxSize() >> ::__ffs(sizeof(queueChunk_t))};

@@ -32,7 +32,7 @@ namespace cuSGA {
         // Insertions and propagations kernel
         inline constexpr targetSize_t SHARED_FRONTIER_BUFFER_SIZE{KernelUtils::WARP_SIZE};
         __device__ __forceinline__ void processNeighbor(const SequenceGraph& d_sequenceGraph, Frontier* warpFrontier, Frontier* shared_frontier, nodeSize_t neighborIdx, cost_t updatedCurrentLayerNeighborCost, ::uint8_t laneIdx);
-        __global__ void insertionsAndPropagations(SequenceGraph d_sequenceGraph, DNABase sequenceBase, connectedComponentSize_t maxConnectedComponentSize, nodeSize_t* d_buffers);
+        __global__ void insertionsAndPropagations(SequenceGraph d_sequenceGraph, DNABase sequenceBase, targetSize_t numWarpsPerBlock, connectedComponentSize_t maxConnectedComponentSize, nodeSize_t* d_buffers);
 
         // Minimum cost kernel
         __global__ void minCost(SequenceGraph d_sequenceGraph, scoreSize_t scoreIdx);
@@ -254,12 +254,9 @@ namespace cuSGA {
             const auto maxConnectedComponentsSize{maxConnectedComponentsSizes[static_cast<DNABase_t>(sequenceBase)]};
             const auto SMemCalculator = [maxConnectedComponentsSize](const targetSize_t blockSize) {
                 // Get number of warps in the block
-                auto numWarps{blockSize >> KernelUtils::WARP_SHIFT};
-                if ((numWarps == 0) && (blockSize > 0)) {
-                    numWarps = 1;
-                }
+                const auto numWarps{(blockSize + KernelUtils::WARP_SIZE - 1) >> KernelUtils::WARP_SHIFT};
 
-                return numWarps * maxConnectedComponentsSize * sizeof(bool);
+                return numWarps * (DoubleBuffer<nodeSize_t>::NUM_DOUBLE_BUFFERS * SequenceGraphKernels::SHARED_FRONTIER_BUFFER_SIZE * sizeof(nodeSize_t) + maxConnectedComponentsSize * sizeof(bool));
             };
 
             // Check if block size has already been computed for the given DNA base
@@ -277,7 +274,7 @@ namespace cuSGA {
 
             // Get grid size (one warp per connected component)
             const auto numConnectedComponents{this->numConnectedComponents[static_cast<::size_t>(sequenceBase)]};
-            const auto numWarpsPerBlock{blockSize >> KernelUtils::WARP_SHIFT};
+            const auto numWarpsPerBlock{(blockSize + KernelUtils::WARP_SIZE - 1) >> KernelUtils::WARP_SHIFT};
             const auto gridSize{KernelUtils::cudaSizeGrid(numConnectedComponents, numWarpsPerBlock)};
 
             // Get dynamic shared memory size
@@ -285,7 +282,7 @@ namespace cuSGA {
 
             // Launch kernel
             const auto maxConnectedComponentSize{maxConnectedComponentsSizes[static_cast<DNABase_t>(sequenceBase)]};
-            KernelUtils::cudaLaunchKernel<SequenceGraphKernels::insertionsAndPropagations>(gridSize, blockSize, dynamicSMemSize, cudaStreamDefault, *pinned_instance, sequenceBase, maxConnectedComponentSize, d_buffers);
+            KernelUtils::cudaLaunchKernel<SequenceGraphKernels::insertionsAndPropagations>(gridSize, blockSize, dynamicSMemSize, cudaStreamDefault, *pinned_instance, sequenceBase, numWarpsPerBlock, maxConnectedComponentSize, d_buffers);
         }
 
         // Launch min cost kernel
@@ -296,10 +293,7 @@ namespace cuSGA {
             // Define shared memory calculator
             const auto SMemCalculator = [](const targetSize_t blockSize) {
                 // Get number of warps in the block
-                auto numWarps{blockSize >> KernelUtils::WARP_SHIFT};
-                if ((numWarps == 0) && (blockSize > 0)) {
-                    numWarps = 1;
-                }
+                const auto numWarps{(blockSize + KernelUtils::WARP_SIZE - 1) >> KernelUtils::WARP_SHIFT};
 
                 return numWarps * sizeof(cost_t);
             };
