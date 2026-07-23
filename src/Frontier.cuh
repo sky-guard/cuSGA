@@ -11,9 +11,10 @@ namespace cuSGA {
     class Frontier {
     public:
         // Frontier related constants
-        static constexpr ::uint8_t QUEUE_FLAG_BIT_SIZE{1};
-        static constexpr ::uint8_t QUEUE_PACKING_FACTOR{(sizeof(queuePack_t) * Utils::BYTE_SIZE) / QUEUE_FLAG_BIT_SIZE};
-        static constexpr ::uint8_t QUEUE_PACK_SHIFT{::std::countr_zero(sizeof(queuePack_t) * Utils::BYTE_SIZE)};
+        static constexpr ::uint8_t BIT_SIZE{1};
+        static constexpr queuePack_t BITMASK{(1u << BIT_SIZE) - 1};
+        static constexpr ::uint8_t PACKING_FACTOR{(sizeof(queuePack_t) * Utils::BYTE_SIZE) / BIT_SIZE};
+        static constexpr ::uint8_t PACK_SHIFT{::std::countr_zero(PACKING_FACTOR)};
 
         // Grow allocator using the expected buffers size
         __host__ __device__ __forceinline__ static void growBuffers(KernelUtils::BumpPtrAllocator* const allocator, const nodeSize_t size) {
@@ -21,7 +22,7 @@ namespace cuSGA {
             DoubleBuffer<nodeSize_t>::growBuffers(allocator, size);
 
             // Grow size for isInQueue
-            const auto numChunks{(size + QUEUE_PACKING_FACTOR - 1) >> QUEUE_PACK_SHIFT};
+            const auto numChunks{(size + PACKING_FACTOR - 1) >> PACK_SHIFT};
             allocator->grow<::std::remove_reference_t<decltype(isInQueue[0])>>(numChunks);
         }
 
@@ -69,16 +70,6 @@ namespace cuSGA {
             return currentSize == 0;
         }
 
-        // Check if device frontier is empty
-        __host__ __forceinline__ bool h2d_isEmpty() const {
-            // Copy back current size from device
-            if (d_instance) {
-                CUDA_CHECK(::cudaMemcpy(&pinned_instance->currentSize, &d_instance->currentSize, sizeof(currentSize), ::cudaMemcpyDeviceToHost));
-            }
-
-            return pinned_instance->currentSize == 0;
-        }
-
         // Get node index for a given index
         __host__ __device__ __forceinline__ nodeSize_t getValue(const nodeSize_t frontierIdx) const {
             return doubleBuffer.current()[frontierIdx];
@@ -107,10 +98,10 @@ namespace cuSGA {
         // Check if given node is in queue
         __host__ __device__ __forceinline__ bool isNodeInQueue(const nodeSize_t nodeIdx) const {
             // Get pack index and bitmask
-            const auto packIdx = nodeIdx >> QUEUE_PACK_SHIFT;
-            const auto bitmask = 1u << (nodeIdx & (sizeof(queuePack_t) * Utils::BYTE_SIZE - 1));
+            const auto chunkIdx = nodeIdx >> PACK_SHIFT;
+            const auto bitmask = BITMASK << (nodeIdx & (PACKING_FACTOR - 1));
 
-            return (isInQueue[packIdx] & bitmask) != 0;
+            return (isInQueue[chunkIdx] & bitmask) != 0;
         }
 
         // Set frontier size
@@ -118,31 +109,9 @@ namespace cuSGA {
             this->currentSize = size;
         }
 
-        // Set device frontier size
-        __host__ __forceinline__ void h2d_setSize(const nodeSize_t size) const {
-            pinned_instance->currentSize = size;
-            CUDA_CHECK(::cudaMemcpyAsync(&d_instance->currentSize, &pinned_instance->currentSize, sizeof(currentSize), ::cudaMemcpyHostToDevice, cudaStreamDefault));
-        }
-
-        // Set device frontier size
-        __device__ __forceinline__ void d2d_setSize(const nodeSize_t size) const {
-            pinned_instance->currentSize = size;
-        }
-
         // Grow frontier queue size
         __host__ __device__ __forceinline__ void growQueueSize(const nodeSize_t count = 1) {
             this->alternateSize += count;
-        }
-
-        // Grow device frontier queue size
-        __host__ __forceinline__ void h2d_growQueueSize() const {
-            pinned_instance->alternateSize += 1;
-            CUDA_CHECK(::cudaMemcpyAsync(&d_instance->alternateSize, &pinned_instance->alternateSize, sizeof(alternateSize), ::cudaMemcpyHostToDevice, cudaStreamDefault));
-        }
-
-        // Grow device frontier queue size
-        __device__ __forceinline__ void d2d_growQueueSize() const {
-            d_instance->alternateSize += 1;
         }
 
         // Insert a node into the current frontier without queueing
@@ -156,23 +125,24 @@ namespace cuSGA {
             doubleBuffer.alternate()[queueIdx] = nodeIdx;
 
             // Get pack index and bitmask
-            const auto packIdx = nodeIdx >> QUEUE_PACK_SHIFT;
-            const auto bitmask = 1u << (nodeIdx & (sizeof(queuePack_t) * Utils::BYTE_SIZE - 1));
+            const auto chunkIdx = nodeIdx >> PACK_SHIFT;
+            const auto bitmask = BITMASK << (nodeIdx & (PACKING_FACTOR - 1));
 
             // Perform OR to set the bit
-            isInQueue[packIdx] |= bitmask;
+            isInQueue[chunkIdx] |= bitmask;
         }
 
+        // Atomically insert a node into the current frontier queue
         __device__ __forceinline__ void atomicInsertNodeInQueue(const nodeSize_t nodeIdx, const nodeSize_t queueIdx) const {
             // Update double buffer
             doubleBuffer.alternate()[queueIdx] = nodeIdx;
 
             // Get pack index and bitmask
-            const auto packIdx = nodeIdx >> QUEUE_PACK_SHIFT;
-            const auto bitMask = 1u << (nodeIdx & (sizeof(queuePack_t) * Utils::BYTE_SIZE - 1));
+            const auto chunkIdx = nodeIdx >> PACK_SHIFT;
+            const auto bitmask = BITMASK << (nodeIdx & (PACKING_FACTOR - 1));
 
             // Perform atomic OR to set bit
-            ::atomicOr(&isInQueue[packIdx], bitMask);
+            ::atomicOr(&isInQueue[chunkIdx], bitmask);
         }
 
         // Swap from queue to next frontier
@@ -183,66 +153,6 @@ namespace cuSGA {
             // Swap sizes
             this->currentSize = alternateSize;
             this->alternateSize = 0;
-        }
-
-        // Swap from queue to next frontier
-        __host__ __device__ __forceinline__ void swapToQueue() {
-            // Swap buffers
-            this->doubleBuffer.swap();
-
-            // Swap sizes
-            this->currentSize = alternateSize;
-            this->alternateSize = 0;
-
-            // Clear isInQueue
-            const auto numChunks{(doubleBuffer.getSize() + QUEUE_PACKING_FACTOR - 1) >> QUEUE_PACK_SHIFT};
-            ::memset(isInQueue, false, numChunks * sizeof(isInQueue[0]));
-        }
-
-        // Swap from device queue to next device frontier
-        __host__ __forceinline__ void h2d_swapToQueue() const {
-            if (d_instance) {
-                // Swap buffers
-                doubleBuffer.h2d_swap();
-
-                // Swap sizes
-                pinned_instance->currentSize = pinned_instance->alternateSize;
-                pinned_instance->alternateSize = 0;
-
-                // Clear isInQueue
-                const auto numChunks{(doubleBuffer.getSize() + QUEUE_PACKING_FACTOR - 1) >> QUEUE_PACK_SHIFT};
-                CUDA_CHECK(::cudaMemsetAsync(pinned_instance->isInQueue, false, numChunks * sizeof(isInQueue[0]), cudaStreamDefault));
-
-                // Update device instance
-                CUDA_CHECK(::cudaMemcpyAsync(d_instance, pinned_instance, sizeof(Frontier), ::cudaMemcpyHostToDevice, cudaStreamDefault));
-            }
-        }
-
-        // Empty frontier
-        __host__ __device__ __forceinline__ void empty() {
-            // Clear (virtually) the buffers
-            this->currentSize = 0;
-            this->alternateSize = 0;
-
-            // Clear isInQueue
-            const auto numChunks{(doubleBuffer.getSize() + QUEUE_PACKING_FACTOR - 1) >> QUEUE_PACK_SHIFT};
-            ::memset(isInQueue, false, numChunks * sizeof(isInQueue[0]));
-        }
-
-        // Empty device frontier
-        __host__ __forceinline__ void h2d_empty() const {
-            if (d_instance) {
-                // Clear (virtually) the device buffers
-                pinned_instance->currentSize = 0;
-                pinned_instance->alternateSize = 0;
-
-                // Clear isInQueue
-                const auto numChunks{(doubleBuffer.getSize() + QUEUE_PACKING_FACTOR - 1) >> QUEUE_PACK_SHIFT};
-                CUDA_CHECK(::cudaMemsetAsync(pinned_instance->isInQueue, 0, numChunks * sizeof(isInQueue[0]), cudaStreamDefault));
-
-                // Update device instance
-                CUDA_CHECK(::cudaMemcpyAsync(d_instance, pinned_instance, sizeof(Frontier), ::cudaMemcpyHostToDevice, cudaStreamDefault));
-            }
         }
 
         // Shuffle object from the given lane, with the given mask

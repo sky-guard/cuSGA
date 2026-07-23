@@ -79,8 +79,8 @@ namespace cuSGA::ApplicationSettings {
 
         // Move over connected components file names data
 #pragma unroll
-        for (DNABase_t i{0}; i < NUM_BASES; ++i) {
-            parsedArguments.connectedComponentsFileNames[i] = ::std::move(connectedComponentsFileNamesVector[i]);
+        for (DNABase_t baseIdx{0}; baseIdx < NUM_BASES; ++baseIdx) {
+            parsedArguments.connectedComponentsFileNames[baseIdx] = ::std::move(connectedComponentsFileNamesVector[baseIdx]);
         }
 
         return parsedArguments;

@@ -54,8 +54,8 @@ namespace cuSGA {
             }
             const auto basePtr{allocator->emplaceReserve<T>(NUM_DOUBLE_BUFFERS * size)};
 #pragma unroll
-            for (doubleBufferSize_t i{0}; i < NUM_DOUBLE_BUFFERS; ++i) {
-                this->buffers[i] = basePtr + i * (size * sizeof(T));
+            for (doubleBufferSize_t bufferIdx{0}; bufferIdx < NUM_DOUBLE_BUFFERS; ++bufferIdx) {
+                this->buffers[bufferIdx] = basePtr + bufferIdx * (size * sizeof(T));
             }
         }
 
@@ -66,8 +66,8 @@ namespace cuSGA {
         __host__ __device__ __forceinline__ DoubleBuffer(const targetSize_t size, T* const (& buffers)[NUM_DOUBLE_BUFFERS], const selector_t selector, const bool ownsInstance, DoubleBuffer* const pinned_instance = nullptr, DoubleBuffer* const d_instance = nullptr) : size{size}, selector{selector}, ownsInstance{ownsInstance}, pinned_instance{pinned_instance}, d_instance{d_instance} {
             // Set buffers
 #pragma unroll
-            for (doubleBufferSize_t i{0}; i < NUM_DOUBLE_BUFFERS; ++i) {
-                this->buffers[i] = buffers[i];
+            for (doubleBufferSize_t bufferIdx{0}; bufferIdx < NUM_DOUBLE_BUFFERS; ++bufferIdx) {
+                this->buffers[bufferIdx] = buffers[bufferIdx];
             }
         }
 
@@ -123,8 +123,8 @@ namespace cuSGA {
             const auto d_buffersBase{allocator->cudaEmplaceCopy<T>(buffers[0], ::cudaMemcpyHostToDevice, NUM_DOUBLE_BUFFERS * size, false, cudaStreamDefault)};
             T* d_buffers[NUM_DOUBLE_BUFFERS]{nullptr};
 #pragma unroll
-            for (doubleBufferSize_t i{0}; i < NUM_DOUBLE_BUFFERS; ++i) {
-                this->buffers[i] = d_buffersBase + i * (size * sizeof(T));
+            for (doubleBufferSize_t bufferIdx{0}; bufferIdx < NUM_DOUBLE_BUFFERS; ++bufferIdx) {
+                this->buffers[bufferIdx] = d_buffersBase + bufferIdx * (size * sizeof(T));
             }
 
             // Create temporary host instance holding the device pointers
@@ -195,17 +195,6 @@ namespace cuSGA {
             this->selector ^= 1;
         }
 
-        // Swap device buffers
-        __host__ __forceinline__ void h2d_swap() const {
-            if (d_instance) {
-                // Update pinned instance
-                pinned_instance->selector ^= 1;
-
-                // Update device instance asynchronously
-                CUDA_CHECK(::cudaMemcpyAsync(&d_instance->selector, &pinned_instance->selector, sizeof(selector), ::cudaMemcpyHostToDevice, cudaStreamDefault));
-            }
-        }
-
         // Non-const version of subscription operator for assignment and modification
         __host__ __device__ __forceinline__ T& operator[](const targetSize_t idx) {
             return buffers[selector][idx];
@@ -220,8 +209,8 @@ namespace cuSGA {
         __device__ __forceinline__ void shuffle_sync(const unsigned mask, const int srcLaneIdx) {
             this->size = ::__shfl_sync(mask, size, srcLaneIdx);
 #pragma unroll
-            for (doubleBufferSize_t i{0}; i < NUM_DOUBLE_BUFFERS; ++i) {
-                this->buffers[i] = reinterpret_cast<T*>(::__shfl_sync(mask, reinterpret_cast<unsigned long long>(buffers[i]), srcLaneIdx));
+            for (doubleBufferSize_t bufferIdx{0}; bufferIdx < NUM_DOUBLE_BUFFERS; ++bufferIdx) {
+                this->buffers[bufferIdx] = reinterpret_cast<T*>(::__shfl_sync(mask, reinterpret_cast<unsigned long long>(buffers[bufferIdx]), srcLaneIdx));
             }
             this->selector = ::__shfl_sync(mask, selector, srcLaneIdx);
             this->ownsInstance = ::__shfl_sync(mask, ownsInstance, srcLaneIdx);

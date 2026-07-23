@@ -5,17 +5,93 @@
 #include "KernelUtils.cuh"
 
 namespace cuSGA {
-    __host__ SequenceGraph::SequenceGraph(const ::std::string& pangenomeGraphFileName, ::std::string const (& connectedComponentsFileNames)[NUM_BASES], bool ownsInstance, SequenceGraph* pinned_instanceOptional, SequenceGraph* d_instanceOptional) {
-        // Read sequence from file
-        const auto sequence{PackedDNASequence::create()};
+    __host__ SequenceGraph::SequenceGraph(const ::std::string& pangenomeGraphFileName, const ::std::string& sequenceFileName, ::std::string const (& connectedComponentsFileNames)[NUM_BASES], bool ownsInstance, SequenceGraph* pinned_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) : SequenceGraph{PangenomeGraph{}, PackedDNASequence{}, {0}, {nullptr}, {nullptr}, {0}, DoubleBuffer<cost_t>{}, 0, nullptr, ownsInstance, pinned_instanceOptional} {
+        // Get allocator
+        KernelUtils::BumpPtrAllocator* allocator{allocatorOptional};
+        KernelUtils::BumpPtrAllocator allocatorInstance{};
+        if (!allocator) {
+            allocator = &allocatorInstance;
+        }
 
-        // Read pangenome graph from file
-        const auto pangenomeGraph{PangenomeGraph::createFromFile(pangenomeGraphFileName)};
+        // Open pangenome graph file
+        auto pangenomeGraphFile{Utils::openFile(pangenomeGraphFileName)};
 
-        // Create costs double buffer instance
-        const auto numNodes{pangenomeGraph->getNumNodes()};
-        const auto costsDoubleBuffer{DoubleBuffer<::cuda::atomic<::uint64_t, ::cuda::thread_scope_device>>::create(numNodes)};
+        // Read number of nodes from file
+        nodeSize_t numNodes{0};
+        if (!(pangenomeGraphFile >> numNodes)) {
+            throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", pangenomeGraphFileName)};
+        }
 
+        // Read number of edges from file
+        edgeSize_t numEdges{0};
+        if (!(pangenomeGraphFile >> numEdges)) {
+            throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", pangenomeGraphFileName)};
+        }
+
+        // Close pangenome graph file
+        pangenomeGraphFile.close();
+
+        // Open sequence file
+        auto sequenceFile{Utils::openFile(sequenceFileName)};
+
+        // Read number of scores from file
+        scoreSize_t numScores{0};
+        if (!(sequenceFile >> numScores)) {
+            throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", sequenceFileName)};
+        }
+
+        // Read maximum sequence length from file
+        sequenceSize_t maxSequenceLength{0};
+        if (!(sequenceFile >> maxSequenceLength)) {
+            throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", sequenceFileName)};
+        }
+
+        // Close sequence file
+        sequenceFile.close();
+
+        connectedComponentSize_t totalNumConnectedComponents{0};
+#pragma unroll
+        for (DNABase_t baseIdx{0}; baseIdx < NUM_BASES; ++baseIdx) {
+            // Open connected components file
+            auto connectedComponentsFile{Utils::openFile(connectedComponentsFileNames[baseIdx])};
+
+            // Read number of connected components from file
+            connectedComponentSize_t numConnectedComponents{0};
+            if (!(connectedComponentsFile >> numConnectedComponents)) {
+                throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", connectedComponentsFileNames[baseIdx])};
+            }
+
+            // Accumulate number of connected components
+            totalNumConnectedComponents += numConnectedComponents;
+
+            // Close sequence file
+            connectedComponentsFile.close();
+        }
+
+        // Grow allocator
+        if (ownsInstance) {
+            allocator->emplaceReserve<SequenceGraph>();
+            growBuffers(allocator, numNodes, numEdges, maxSequenceLength, totalNumConnectedComponents, numScores);
+        }
+
+        // Initialize allocator
+        if (ownsInstance) {
+            allocator->initHostPinnedMem();
+        }
+
+        // Emplace buffers
+        if (ownsInstance) {
+            this->pinned_instance = allocator->emplaceReserve<SequenceGraph>();
+        }
+        this->pangenomeGraph = PangenomeGraph{pangenomeGraphFileName, false, &pinned_instance->pangenomeGraph, allocator};
+        this->sequence = PackedDNASequence{sequenceFileName, false, &pinned_instance->sequence, allocator};
+        // ...
+        // TODO: read remaining attributes, kernel to find maxs or not?
+        this->costsDoubleBuffer = DoubleBuffer{numNodes, false, &pinned_instance->costsDoubleBuffer, allocator};
+        this->numScores = numScores;
+        this->scores = allocator->emplaceSet<::std::remove_pointer_t<decltype(scores)>>(-1, numScores);
+
+        // TODO
         // Read connected components from files
         ::size_t numConnectedComponents[NUM_BASES]{};
         ::size_t* connectedComponentsOffsets[NUM_BASES]{nullptr};
@@ -58,152 +134,145 @@ namespace cuSGA {
             }
             connectedComponentsMappings[i] = connectedComponentsMappingsValue;
         }
-
-        // Create sequence graph instance
-        const auto sequenceGraph{new SequenceGraph{sequence, pangenomeGraph, numConnectedComponents, connectedComponentsOffsets, connectedComponentsMappings, costsDoubleBuffer}};
-
-        return sequenceGraph;
     }
 
-    __host__ SequenceGraph* SequenceGraph::copyToDevice(SequenceGraph* d_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) {
+    __host__ SequenceGraph SequenceGraph::copyToDevice(SequenceGraph* d_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) {
         // Check if device instance already exists for this sequence graph
         if (d_instance) {
-            return d_instance;
+            throw ::std::runtime_error{"Device instance already exists for this Sequence Graph!"};
         }
 
-        // Allocate device buffers
-        const auto numNodes{pangenomeGraph->getNumNodes()};
-        ::size_t* d_connectedComponentsOffsets[NUM_BASES]{nullptr};
-        ::size_t* d_connectedComponentsMappings[NUM_BASES]{nullptr};
+        // Get allocator
+        KernelUtils::BumpPtrAllocator* allocator{allocatorOptional};
+        KernelUtils::BumpPtrAllocator allocatorInstance{};
+        if (!allocator) {
+            allocator = &allocatorInstance;
+        }
+
+        connectedComponentSize_t totalNumConnectedComponents{0};
 #pragma unroll
-        for (::size_t i{0}; i < NUM_BASES; ++i) {
-            KernelUtils::cudaMalloc(&d_connectedComponentsOffsets[i], (numConnectedComponents[i] + 1) * sizeof(::uint64_t));
-            KernelUtils::cudaMalloc(&d_connectedComponentsMappings[i], numNodes * sizeof(::uint64_t));
+        for (DNABase_t i{0}; i < NUM_BASES; ++i) {
+            totalNumConnectedComponents += numConnectedComponents[i];
         }
 
-        // Copy buffers data from host to device
-        const auto d_sequence{sequence->copyToDevice()};
-        const auto d_pangenomeGraph{pangenomeGraph->copyToDevice()};
-        const auto d_costsDoubleBuffer{costsDoubleBuffer->copyToDevice()};
+        // Grow allocator
+        if (ownsInstance) {
+            allocator->grow<SequenceGraph>();
+            growBuffersWithoutSequence(allocator, pangenomeGraph.getNumNodes(), pangenomeGraph.getNumEdges(), totalNumConnectedComponents, numScores);
+        }
+
+        // Initialize allocator
+        if (ownsInstance) {
+            allocator->initCudaGMem();
+        }
+
+        // Reserve instance
+        if (ownsInstance) {
+            this->d_instance = allocator->emplaceReserve<SequenceGraph>();
+        }
+        else {
+            this->d_instance = d_instanceOptional;
+        }
+
+        // Emplace buffers
+        const auto d_pangenomeGraph{pangenomeGraph.copyToDevice(&d_instance->pangenomeGraph, allocator)};
+        const auto d_connectedComponentsOffsetsBase{allocator->cudaEmplaceCopy<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsOffsets[0])>>>(connectedComponentsOffsets[0], ::cudaMemcpyHostToDevice, totalNumConnectedComponents, false, cudaStreamDefault)};
+        const auto d_connectedComponentsOffsetsMappingsBase{allocator->cudaEmplaceCopy<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsMappings[0])>>>(connectedComponentsMappings[0], ::cudaMemcpyHostToDevice, NUM_BASES * pangenomeGraph.getNumNodes(), false, cudaStreamDefault)};
+        nodeSize_t* d_connectedComponentsOffsets[NUM_BASES]{nullptr};
+        nodeSize_t* d_connectedComponentsMappings[NUM_BASES]{nullptr};
+        connectedComponentSize_t connectedComponentsCounter{0};
 #pragma unroll
-        for (::size_t i{0}; i < NUM_BASES; ++i) {
-            KernelUtils::cudaMemcpy(d_connectedComponentsOffsets[i], connectedComponentsOffsets[i], (numConnectedComponents[i] + 1) * sizeof(::uint64_t), ::cudaMemcpyHostToDevice);
-            KernelUtils::cudaMemcpy(d_connectedComponentsMappings[i], connectedComponentsMappings[i], numNodes * sizeof(::uint64_t), ::cudaMemcpyHostToDevice);
+        for (DNABase_t baseIdx{0}; baseIdx < NUM_BASES; ++baseIdx) {
+            d_connectedComponentsOffsets[baseIdx] = d_connectedComponentsOffsetsBase + connectedComponentsCounter;
+            d_connectedComponentsMappings[baseIdx] = d_connectedComponentsOffsetsMappingsBase + baseIdx * pangenomeGraph.getNumNodes();
+            connectedComponentsCounter += numConnectedComponents[baseIdx];
         }
-
-        // Allocate device pangenome graph instance
-        SequenceGraph* d_sequenceGraph{nullptr};
-        KernelUtils::cudaMalloc(&d_sequenceGraph, sizeof(SequenceGraph));
+        const auto d_costsDoubleBuffer{costsDoubleBuffer.copyToDevice(&d_instance->costsDoubleBuffer, allocator)};
+        const auto d_scores{allocator->cudaEmplaceCopy<::std::remove_pointer_t<decltype(scores)>>(scores, ::cudaMemcpyHostToDevice, numScores, false, cudaStreamDefault)};
 
         // Create temporary host instance holding the device pointers
-        const SequenceGraph deviceSequenceGraph{d_sequence, d_pangenomeGraph, numConnectedComponents, d_connectedComponentsOffsets, d_connectedComponentsMappings, d_costsDoubleBuffer, score.load(::cuda::memory_order_relaxed), d_instance};
+        const SequenceGraph d_sequenceGraph{d_pangenomeGraph, sequence, numConnectedComponents, d_connectedComponentsOffsets, d_connectedComponentsMappings, maxConnectedComponentsSizes, d_costsDoubleBuffer, numScores, d_scores, ownsInstance, pinned_instance, d_instance};
 
-        // Update host instance data
-        this->d_instance = d_sequenceGraph;
-
-        // Copy instance data from host to device
-        KernelUtils::cudaMemcpy(d_sequenceGraph, &deviceSequenceGraph, sizeof(SequenceGraph), ::cudaMemcpyHostToDevice);
+        // Emplace instance
+        if (ownsInstance) {
+            *pinned_instance = d_sequenceGraph;
+            CUDA_CHECK(::cudaMemcpyAsync(d_instance, pinned_instance, sizeof(SequenceGraph), ::cudaMemcpyHostToDevice, cudaStreamDefault));
+        }
 
         return d_sequenceGraph;
     }
 
     __host__ void SequenceGraph::free() const {
-        // Free device memory if device instance is present
+        // Free device memory if present
         if (d_instance) {
-            // Create a temporary host copy of the device instance to get its internal device pointers
-            SequenceGraph deviceSequenceGraph{};
-            KernelUtils::cudaMemcpy(&deviceSequenceGraph, d_instance, sizeof(SequenceGraph), ::cudaMemcpyDeviceToHost);
-
-            // Free device connected components offsets and mappings
-#pragma unroll
-            for (::size_t i{0}; i < NUM_BASES; ++i) {
-                KernelUtils::cudaFree(deviceSequenceGraph.connectedComponentsOffsets[i]);
-                KernelUtils::cudaFree(deviceSequenceGraph.connectedComponentsMappings[i]);
+            if (ownsInstance) {
+                CUDA_CHECK(::cudaFreeAsync(d_instance, cudaStreamDefault));
             }
-
-            // Free device sequence graph instance
-            KernelUtils::cudaFree(d_instance);
+            else {
+                CUDA_CHECK(::cudaFreeAsync(pinned_instance->getBuffersRoot(), cudaStreamDefault));
+            }
         }
 
         // Free host memory
-        if (sequence) {
-            this->sequence->free();
+        if (ownsInstance) {
+            CUDA_CHECK(::cudaFreeHost(pinned_instance));
         }
-        if (pangenomeGraph) {
-            this->pangenomeGraph->free(true);
+        else {
+            CUDA_CHECK(::cudaFreeHost(getBuffersRoot()));
         }
-#pragma unroll
-        for (::size_t i{0}; i < NUM_BASES; ++i) {
-            delete[] connectedComponentsOffsets[i];
-            delete[] connectedComponentsMappings[i];
-        }
-        if (costsDoubleBuffer) {
-            this->costsDoubleBuffer->free();
-        }
-        delete this;
     }
 
-    __host__ ::std::vector<uint64_t> SequenceGraph::align(const ::std::string& sequenceFileName) {
+    __host__ cost_t* SequenceGraph::align(const ::std::string& sequenceFileName, nodeSize_t* const d_buffers) {
         // Open file
         ::std::ifstream sequenceFile{sequenceFileName};
         if (!sequenceFile.is_open()) {
             throw ::std::runtime_error{::std::format("Unable to open file: {}", sequenceFileName)};
         }
 
-        // Create scores instance
-        ::std::vector<::uint64_t> scores{};
-
         // Copy sequence graph instance to device
         copyToDevice();
 
-        while (sequence->readFromFile(sequenceFileName, sequenceFile)) {
+        // Loop over all sequences in the input file
+        scoreSize_t scoreIdx{0};
+        while (sequence.readFromFile(sequenceFileName, &sequenceFile)) {
             // Check for non-empty sequence
-            if (sequence->getNumBases() == 0) {
+            if (sequence.getNumBases() == 0) {
                 throw ::std::runtime_error{"Unable to align an empty sequence!"};
             }
 
             // Perform initialization step
-            initialize(false);
-
-            // Swap costs double buffer for the next layer
-            costsDoubleBuffer->h2d_swap();
+            initialize();
 
             // Solve alignment layer by layer
-            for (::size_t layerIdx{1}; layerIdx < sequence->getNumBases(); ++layerIdx) {
+            for (sequenceSize_t layerIdx{1}; layerIdx < sequence.getNumBases(); ++layerIdx) {
                 // Perform deletions for the given layer
-                deletions(layerIdx,false);
+                deletions();
 
                 // Perform substitutions for the given layer
-                substitutions(layerIdx, false);
+                substitutions(layerIdx);
 
                 // Skip insertions and propagations for the last layer
-                if (layerIdx < sequence->getNumBases() - 1) {
-                    // Perform insertions for the given layer
-                    insertions(frontier, false);
-
-                    // Perform propagations for the given layer
-                    propagations(layerIdx, frontier, false);
+                if (layerIdx < sequence.getNumBases() - 1) {
+                    // Perform insertions and propagations for the given layer
+                    insertionsAndPropagations(layerIdx, d_buffers);
 
                     // Swap costs double buffer for the next layer
-                    costsDoubleBuffer->h2d_swap();
+                    pinned_instance->costsDoubleBuffer.swap();
                 }
             }
 
-            // Compute minimum score
-            minCost(true);
+            // Compute minimum cost
+            minCost(scoreIdx);
 
-            // Copy back score from device
-            const auto score{getScoreSync()};
-
-            // Save score
-            scores.emplace_back(score);
-
-            // Reset score
-            resetScoreSync();
+            // Move to the next score
+            ++scoreIdx;
         }
 
         // Close file
         sequenceFile.close();
+
+        // Copy over scores from device
+        const auto scores{h2d_getScores()};
 
         return scores;
     }
@@ -218,7 +287,7 @@ namespace cuSGA {
             const auto initialNodeCost{(initialSequenceBase == nodeBase)? 0 : SequenceGraph::INITIALIZATION_COST};
 
             // Initialize node cost for the next layer
-            d_sequenceGraph.getCostsDoubleBuffer().current()[nodeIdx] = initialNodeCost;
+            d_sequenceGraph.getCostsDoubleBuffer().alternate()[nodeIdx] = initialNodeCost;
         }
     }
 
@@ -329,7 +398,7 @@ namespace cuSGA {
             const auto connectedComponentStart{d_sequenceGraph.getConnectedComponentOffset(sequenceBase, warpID)};
             const auto connectedComponentEnd{d_sequenceGraph.getConnectedComponentOffset(sequenceBase, warpID + 1)};
             const auto connectedComponentSize{connectedComponentEnd - connectedComponentStart};
-            const auto packedQueueSize{(maxConnectedComponentSize + Frontier::QUEUE_PACKING_FACTOR - 1) >> Frontier::QUEUE_PACK_SHIFT};
+            const auto packedQueueSize{(maxConnectedComponentSize + Frontier::PACKING_FACTOR - 1) >> Frontier::PACK_SHIFT};
 
             // Get shared frontier
             const auto shared_buffersBase{shared_buffers + ((warpIdx * SHARED_FRONTIER_BUFFER_SIZE) << 1)};
@@ -442,7 +511,7 @@ namespace cuSGA {
         // Grid-level reduction using stride (safe for overflowing threads)
         const auto stride{::blockDim.x * ::gridDim.x};
         for (nodeSize_t nodeIdx{threadId}; nodeIdx < d_sequenceGraph.getPangenomeGraph().getNumNodes(); nodeIdx += stride) {
-            const cost_t cost{d_sequenceGraph.getCostsDoubleBuffer()[nodeIdx]};
+            const cost_t cost{d_sequenceGraph.getCostsDoubleBuffer().current()[nodeIdx]};
             threadMinCost = ::min(cost, threadMinCost);
         }
 

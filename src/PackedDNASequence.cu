@@ -4,6 +4,7 @@
 #include <fstream>
 
 #include "KernelUtils.cuh"
+#include "SequenceGraph.cuh"
 #include "Utils.cuh"
 
 namespace cuSGA {
@@ -17,6 +18,11 @@ namespace cuSGA {
 
         // Open file
         auto file{Utils::openFile(fileName)};
+
+        // Read and skip number of scores from file
+        if (scoreSize_t numScores{0}; !(file >> numScores)) {
+            throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", fileName)};
+        }
 
         // Read max number of bases from file
         sequenceSize_t maxNumBases{0};
@@ -45,7 +51,7 @@ namespace cuSGA {
         else {
             this->pinned_instance = pinned_instanceOptional;
         }
-        this->numChunks = (maxNumBases + PACKING_FACTOR - 1) / PACKING_FACTOR;
+        this->numChunks = (maxNumBases + PACKING_FACTOR - 1) >> PACK_SHIFT;
         this->bases = allocator->emplaceReserve<::std::remove_reference_t<decltype(bases[0])>>(numChunks);
         this->ownsInstance = ownsInstance;
     }
@@ -83,11 +89,11 @@ namespace cuSGA {
             this->pinned_instance = pinned_instanceOptional;
         }
         this->numBases = numBasesOptional.value();
-        this->numChunks = (numBases + PACKING_FACTOR - 1) / PACKING_FACTOR;
+        this->numChunks = (numBases + PACKING_FACTOR - 1) >> PACK_SHIFT;
         this->bases = allocator->emplaceReserve<::std::remove_reference_t<decltype(bases[0])>>(numChunks);
 
         // Read base values from file
-        for (sequenceSize_t i{0}; i < numBases; ++i) {
+        for (sequenceSize_t sequenceIdx{0}; sequenceIdx < numBases; ++sequenceIdx) {
             // Read character from file
             char c{'\0'};
             if (!(*file >> c)) {
@@ -98,11 +104,11 @@ namespace cuSGA {
             const auto base{DNABaseConversion::charToDNABase(c)};
 
             // Get chunk index and bit offset
-            const auto chunkIdx{i / PACKING_FACTOR};
-            const auto bitOffset{(i % PACKING_FACTOR) * DNA_BASE_BIT_SIZE};
+            const auto chunkIdx{sequenceIdx / PACKING_FACTOR};
+            const auto bitOffset{(sequenceIdx % PACKING_FACTOR) * BIT_SIZE};
 
             // Pack into the pack_t
-            bases[chunkIdx] |= static_cast<sequencePack_t>(base) << bitOffset;
+            bases[chunkIdx] |= (static_cast<sequencePack_t>(base) << bitOffset);
         }
     }
 
@@ -122,7 +128,7 @@ namespace cuSGA {
         // Grow allocator
         if (ownsInstance) {
             allocator->grow<PackedDNASequence>();
-            growBuffers(allocator, numChunks * PACKING_FACTOR);
+            growBuffers(allocator, numChunks << PACK_SHIFT);
         }
 
         // Initialize allocator
@@ -187,7 +193,7 @@ namespace cuSGA {
         }
 
         // Read base values from file
-        for (sequenceSize_t i{0}; i < numBases; ++i) {
+        for (sequenceSize_t sequenceIdx{0}; sequenceIdx < numBases; ++sequenceIdx) {
             // Read character from file
             char c{'\0'};
             if (!(*file >> c)) {
@@ -198,16 +204,16 @@ namespace cuSGA {
             const auto base{DNABaseConversion::charToDNABase(c)};
 
             // Get chunk index and bit offset
-            const auto chunkIdx{i / PACKING_FACTOR};
-            const auto bitOffset{(i % PACKING_FACTOR) * DNA_BASE_BIT_SIZE};
+            const auto chunkIdx{sequenceIdx >> PACK_SHIFT};
+            const auto bitOffset{(sequenceIdx & (PACKING_FACTOR - 1)) * BIT_SIZE};
 
             // Check if chunk needs to be cleared before writing
-            if (i % PACKING_FACTOR == 0) {
+            if ((sequenceIdx & (PACKING_FACTOR - 1)) == 0) {
                 bases[chunkIdx] = 0;
             }
 
             // Pack into the pack_t
-            bases[chunkIdx] |= static_cast<sequencePack_t>(base) << bitOffset;
+            bases[chunkIdx] |= (static_cast<sequencePack_t>(base) << bitOffset);
         }
 
         // Update device instance
@@ -216,7 +222,7 @@ namespace cuSGA {
             pinned_instance->numBases = numBases;
 
             // Update device buffer
-            const auto newNumChunks{(numBases + PACKING_FACTOR - 1) / PACKING_FACTOR};
+            const auto newNumChunks{(numBases + PACKING_FACTOR - 1) >> PACK_SHIFT};
             CUDA_CHECK(::cudaMemcpyAsync(pinned_instance->bases, bases, newNumChunks * sizeof(bases[0]), ::cudaMemcpyHostToDevice, cudaStreamDefault));
 
             // Update device instance

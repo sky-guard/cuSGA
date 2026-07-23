@@ -19,14 +19,15 @@ namespace cuSGA {
     class PackedDNASequence {
     public:
         // Packed sequence related constants
-        static constexpr ::uint8_t DNA_BASE_BIT_SIZE{2};
-        static constexpr sequencePack_t DNA_BASE_BITMASK{(1u << DNA_BASE_BIT_SIZE) - 1};
-        static constexpr ::uint8_t PACKING_FACTOR{(sizeof(sequencePack_t) * Utils::BYTE_SIZE) / DNA_BASE_BIT_SIZE};
+        static constexpr ::uint8_t BIT_SIZE{2};
+        static constexpr sequencePack_t BITMASK{(1u << BIT_SIZE) - 1};
+        static constexpr ::uint8_t PACKING_FACTOR{(sizeof(sequencePack_t) * Utils::BYTE_SIZE) / BIT_SIZE};
+        static constexpr ::uint8_t PACK_SHIFT{::std::countr_zero(PACKING_FACTOR)};
 
         // Grow allocator using the expected buffers size
         __host__ __device__ __forceinline__ static void growBuffers(KernelUtils::BumpPtrAllocator* const allocator, const sequenceSize_t numBases) {
             // Grow size for bases
-            const auto numChunks{(numBases + PACKING_FACTOR - 1) / PACKING_FACTOR};
+            const auto numChunks{(numBases + PACKING_FACTOR - 1) >> PACK_SHIFT};
             allocator->grow<::std::remove_reference_t<decltype(bases[0])>>(numChunks);
         }
 
@@ -69,11 +70,11 @@ namespace cuSGA {
         // Get DNA base at a given index
         __host__ __device__ __forceinline__ DNABase operator[](const size_t idx) const {
             // Get chunk index and bit offset from node index
-            const auto chunkIdx{idx / PACKING_FACTOR};
-            const auto bitOffset{(idx % PACKING_FACTOR) * DNA_BASE_BIT_SIZE};
+            const auto chunkIdx{idx >> PACK_SHIFT};
+            const auto bitOffset{(idx & (PACKING_FACTOR - 1)) * BIT_SIZE};
 
             // Get chunk, shift bits and extract using mask
-            const auto base{static_cast<DNABase>((bases[chunkIdx] >> bitOffset) & DNA_BASE_BITMASK)};
+            const auto base{static_cast<DNABase>((bases[chunkIdx] >> bitOffset) & BITMASK)};
 
             return base;
         }

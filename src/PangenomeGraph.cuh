@@ -49,7 +49,7 @@ namespace cuSGA {
         ~PangenomeGraph() = default;
 
         // Move pangenome graph to device
-        __host__ PangenomeGraph* copyToDevice(PangenomeGraph* d_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
+        __host__ PangenomeGraph copyToDevice(PangenomeGraph* d_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
         // Free pangenome graph
         __host__ void free() const;
 

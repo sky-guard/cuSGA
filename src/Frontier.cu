@@ -27,7 +27,8 @@ namespace cuSGA {
             this->pinned_instance = allocator->emplaceReserve<Frontier>();
         }
         this->doubleBuffer = DoubleBuffer{size, false, &pinned_instance->doubleBuffer, allocator};
-        this->isInQueue = allocator->emplaceSet<::std::remove_reference_t<decltype(isInQueue[0])>>(0, size);
+        const auto numChunks{(size + PACKING_FACTOR - 1) >> PACK_SHIFT};
+        this->isInQueue = allocator->emplaceSet<::std::remove_reference_t<decltype(isInQueue[0])>>(0, numChunks);
     }
 
     __host__ Frontier Frontier::copyToDevice(Frontier* const d_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) {
@@ -64,7 +65,8 @@ namespace cuSGA {
 
         // Emplace buffers
         const auto d_doubleBuffer{doubleBuffer.copyToDevice(&d_instance->doubleBuffer, allocator)};
-        const auto d_isInQueue{allocator->cudaEmplaceCopy<::std::remove_reference_t<decltype(isInQueue[0])>>(isInQueue, ::cudaMemcpyHostToDevice, doubleBuffer.getSize(), false, cudaStreamDefault)};
+        const auto numChunks{(doubleBuffer.getSize() + PACKING_FACTOR - 1) >> PACK_SHIFT};
+        const auto d_isInQueue{allocator->cudaEmplaceCopy<::std::remove_reference_t<decltype(isInQueue[0])>>(isInQueue, ::cudaMemcpyHostToDevice, numChunks, false, cudaStreamDefault)};
 
         // Create temporary host instance holding the device pointers
         const Frontier d_frontier{currentSize, alternateSize, d_doubleBuffer, d_isInQueue, ownsInstance, pinned_instance,d_instance};

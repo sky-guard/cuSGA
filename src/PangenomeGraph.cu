@@ -29,9 +29,6 @@ namespace cuSGA {
             throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", fileName)};
         }
 
-        // Close file
-        file.close();
-
         // Grow allocator
         if (ownsInstance) {
             allocator->emplaceReserve<PangenomeGraph>();
@@ -51,6 +48,9 @@ namespace cuSGA {
         this->baseValues = PackedDNASequence{fileName, &file, false, numNodes, &pinned_instance->baseValues, allocator};
         this->columnValues = allocator->emplaceReserve<::std::remove_reference_t<decltype(columnValues[0])>>(numEdges);
         this->rowOffsets = allocator->emplaceReserve<::std::remove_reference_t<decltype(rowOffsets[0])>>(numNodes + 1);
+
+        // Close file
+        file.close();
     }
 
     __host__ PangenomeGraph::PangenomeGraph(const ::std::string& fileName, ::std::ifstream* file, const bool ownsInstance, ::std::optional<nodeSize_t> numNodesOptional, ::std::optional<edgeSize_t> numEdgesOptional, PangenomeGraph* pinned_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) : PangenomeGraph{0, PackedDNASequence{}, nullptr, nullptr, ownsInstance, pinned_instanceOptional} {
@@ -100,21 +100,21 @@ namespace cuSGA {
         this->rowOffsets = allocator->emplaceReserve<::std::remove_reference_t<decltype(rowOffsets[0])>>(numNodesOptional.value() + 1);
 
         // Read row offsets from file
-        for (nodeSize_t i{0}; i <= numNodesOptional.value(); ++i) {
-            if (!(*file >> rowOffsets[i])) {
+        for (nodeSize_t rowOffsetIdx{0}; rowOffsetIdx <= numNodesOptional.value(); ++rowOffsetIdx) {
+            if (!(*file >> rowOffsets[rowOffsetIdx])) {
                 throw ::std::runtime_error{::std::format("An error occurred while reading CSR row offsets from file: {}", fileName)};
             }
         }
 
         // Read column values from file
-        for (edgeSize_t i{0}; i < numEdges; ++i) {
-            if (!(*file >> columnValues[i])) {
+        for (edgeSize_t edgeIdx{0}; edgeIdx < numEdges; ++edgeIdx) {
+            if (!(*file >> columnValues[edgeIdx])) {
                 throw ::std::runtime_error{::std::format("An error occurred while reading CSR column values from file: {}", fileName)};
             }
         }
     }
 
-    __host__ PangenomeGraph* PangenomeGraph::copyToDevice(PangenomeGraph* d_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) {
+    __host__ PangenomeGraph PangenomeGraph::copyToDevice(PangenomeGraph* d_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) {
         // Check if device instance already exists for this pangenome graph
         if (d_instance) {
             throw ::std::runtime_error{"Device instance already exists for this Pangenome Graph!"};
@@ -152,7 +152,7 @@ namespace cuSGA {
         const auto d_rowOffsets{allocator->cudaEmplaceCopy<::std::remove_reference_t<decltype(rowOffsets[0])>>(rowOffsets, ::cudaMemcpyHostToDevice, baseValues.getNumBases() + 1, false, cudaStreamDefault)};
 
         // Create temporary host instance holding the device pointers
-        const PangenomeGraph d_pangenomeGraph{baseValues.getNumBases(), numEdges, d_baseValues, d_columnValues, d_rowOffsets, d_pangenomeGraph};
+        const PangenomeGraph d_pangenomeGraph{numEdges, d_baseValues, d_columnValues, d_rowOffsets, ownsInstance, pinned_instance, d_pangenomeGraph};
 
         // Emplace instance
         if (ownsInstance) {
