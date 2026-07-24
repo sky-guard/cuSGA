@@ -1,11 +1,12 @@
 #include "SequenceGraph.cuh"
 
 #include <fstream>
+#include <iostream>
 
 #include "KernelUtils.cuh"
 
 namespace cuSGA {
-    __host__ SequenceGraph::SequenceGraph(const ::std::string& pangenomeGraphFileName, const ::std::string& sequenceFileName, ::std::string const (& connectedComponentsFileNames)[NUM_BASES], bool ownsInstance, SequenceGraph* pinned_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) : SequenceGraph{PangenomeGraph{}, PackedDNASequence{}, {0}, {nullptr}, {nullptr}, {0}, DoubleBuffer<cost_t>{}, 0, nullptr, ownsInstance, pinned_instanceOptional} {
+    __host__ SequenceGraph::SequenceGraph(const ::std::string& pangenomeGraphFileName, const ::std::string& sequenceFileName, ::std::string const (& connectedComponentsFileNames)[NUM_BASES], bool ownsInstance, SequenceGraph* pinned_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) : SequenceGraph{PangenomeGraph{}, PackedDNASequence{}, {0}, {nullptr}, {nullptr}, {nullptr}, {0}, DoubleBuffer<cost_t>{}, 0, nullptr, ownsInstance, pinned_instanceOptional} {
         // Get allocator
         KernelUtils::BumpPtrAllocator* allocator{allocatorOptional};
         KernelUtils::BumpPtrAllocator allocatorInstance{};
@@ -80,6 +81,7 @@ namespace cuSGA {
         this->sequence = PackedDNASequence{sequenceFileName, false, &pinned_instance->sequence, allocator};
         const auto connectedComponentsOffsetsBase{allocator->emplaceReserve<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsOffsets[0])>>>(totalNumConnectedComponents + NUM_BASES)};
         const auto connectedComponentsMappingsBase{allocator->emplaceReserve<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsMappings[0])>>>(NUM_BASES * numNodes)};
+        const auto connectedComponentsLocalIndexMappingsBase{allocator->emplaceReserve<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsLocalIndexMappings[0])>>>(NUM_BASES * numNodes)};
         connectedComponentSize_t connectedComponentsCounter{0};
 #pragma unroll
         for (DNABase_t baseIdx{0}; baseIdx < NUM_BASES; ++baseIdx) {
@@ -99,14 +101,23 @@ namespace cuSGA {
             }
             this->connectedComponentsOffsets[baseIdx] = connectedComponentsOffsets;
 
-            // Read connected components mappings from file
+            // Read connected components mappings from file and build inverse local index map
             const auto connectedComponentsMappings{connectedComponentsMappingsBase + baseIdx * numNodes};
-            for (nodeSize_t nodeIdx{0}; nodeIdx < numNodes; ++nodeIdx) {
-                if (!(connectedComponentsFile >> connectedComponentsMappings[nodeIdx])) {
-                    throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", connectedComponentsFileNames[baseIdx])};
+            const auto connectedComponentsLocalIndexMappings{connectedComponentsLocalIndexMappingsBase + baseIdx * numNodes};
+            for (connectedComponentSize_t connectedComponentIndex{0}; connectedComponentIndex < numConnectedComponentsValue; ++connectedComponentIndex) {
+                const auto connectedComponentStart{connectedComponentsOffsets[connectedComponentIndex]};
+                const auto connectedComponentEnd{connectedComponentsOffsets[connectedComponentIndex + 1]};
+                for (nodeSize_t nodeIdx{connectedComponentStart}; nodeIdx < connectedComponentEnd; ++nodeIdx) {
+                    nodeSize_t globalNodeIdx{0};
+                    if (!(connectedComponentsFile >> globalNodeIdx)) {
+                        throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", connectedComponentsFileNames[baseIdx])};
+                    }
+                    connectedComponentsMappings[nodeIdx] = globalNodeIdx;
+                    connectedComponentsLocalIndexMappings[globalNodeIdx] = nodeIdx - connectedComponentStart;
                 }
             }
             this->connectedComponentsMappings[baseIdx] = connectedComponentsMappings;
+            this->connectedComponentsLocalIndexMappings[baseIdx] = connectedComponentsLocalIndexMappings;
 
             // Find max connected component size for this base
             connectedComponentSize_t maxConnectedComponentsSize{0};
@@ -174,21 +185,24 @@ namespace cuSGA {
         // Emplace buffers
         const auto d_pangenomeGraph{pangenomeGraph.copyToDevice(&d_instance->pangenomeGraph, allocator)};
         const auto d_connectedComponentsOffsetsBase{allocator->cudaEmplaceCopy<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsOffsets[0])>>>(connectedComponentsOffsets[0], ::cudaMemcpyHostToDevice, totalNumConnectedComponents + NUM_BASES, false, cudaStreamDefault)};
-        const auto d_connectedComponentsOffsetsMappingsBase{allocator->cudaEmplaceCopy<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsMappings[0])>>>(connectedComponentsMappings[0], ::cudaMemcpyHostToDevice, NUM_BASES * pangenomeGraph.getNumNodes(), false, cudaStreamDefault)};
+        const auto d_connectedComponentsMappingsBase{allocator->cudaEmplaceCopy<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsMappings[0])>>>(connectedComponentsMappings[0], ::cudaMemcpyHostToDevice, NUM_BASES * pangenomeGraph.getNumNodes(), false, cudaStreamDefault)};
+        const auto d_connectedComponentsLocalIndexMappingsBase{allocator->cudaEmplaceCopy<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsLocalIndexMappings[0])>>>(connectedComponentsLocalIndexMappings[0], ::cudaMemcpyHostToDevice, NUM_BASES * pangenomeGraph.getNumNodes(), false, cudaStreamDefault)};
         nodeSize_t* d_connectedComponentsOffsets[NUM_BASES]{nullptr};
         nodeSize_t* d_connectedComponentsMappings[NUM_BASES]{nullptr};
+        connectedComponentSize_t* d_connectedComponentsLocalIndexMappings[NUM_BASES]{nullptr};
         connectedComponentSize_t connectedComponentsCounter{0};
 #pragma unroll
         for (DNABase_t baseIdx{0}; baseIdx < NUM_BASES; ++baseIdx) {
             d_connectedComponentsOffsets[baseIdx] = d_connectedComponentsOffsetsBase + connectedComponentsCounter;
-            d_connectedComponentsMappings[baseIdx] = d_connectedComponentsOffsetsMappingsBase + baseIdx * pangenomeGraph.getNumNodes();
+            d_connectedComponentsMappings[baseIdx] = d_connectedComponentsMappingsBase + baseIdx * pangenomeGraph.getNumNodes();
+            d_connectedComponentsLocalIndexMappings[baseIdx] = d_connectedComponentsLocalIndexMappingsBase + baseIdx * pangenomeGraph.getNumNodes();
             connectedComponentsCounter += (numConnectedComponents[baseIdx] + 1);
         }
         const auto d_costsDoubleBuffer{costsDoubleBuffer.copyToDevice(&d_instance->costsDoubleBuffer, allocator)};
         const auto d_scores{allocator->cudaEmplaceCopy<::std::remove_pointer_t<decltype(scores)>>(scores, ::cudaMemcpyHostToDevice, numScores, false, cudaStreamDefault)};
 
         // Create temporary host instance holding the device pointers
-        const SequenceGraph d_sequenceGraph{d_pangenomeGraph, sequence, numConnectedComponents, d_connectedComponentsOffsets, d_connectedComponentsMappings, maxConnectedComponentsSizes, d_costsDoubleBuffer, numScores, d_scores, ownsInstance, pinned_instance, d_instance};
+        const SequenceGraph d_sequenceGraph{d_pangenomeGraph, sequence, numConnectedComponents, d_connectedComponentsOffsets, d_connectedComponentsMappings, d_connectedComponentsLocalIndexMappings, maxConnectedComponentsSizes, d_costsDoubleBuffer, numScores, d_scores, ownsInstance, pinned_instance, d_instance};
 
         // Emplace instance
         if (ownsInstance) {
@@ -320,7 +334,7 @@ namespace cuSGA {
                 const auto neighborBase{d_sequenceGraph.getPangenomeGraph().getDNABase(neighborIdx)};
 
                 // Compute updated node cost
-                const auto updatedCurrentLayerNeighborCost{(sequenceBase == neighborBase)? previousLayerNodeCost : previousLayerNodeCost + SequenceGraph::SUBSTITUTION_COST};
+                const auto updatedCurrentLayerNeighborCost{(sequenceBase == neighborBase)? previousLayerNodeCost : (previousLayerNodeCost + SequenceGraph::SUBSTITUTION_COST)};
 
                 // Set cost to atomic min
                 // NOTE: Because in-degree for a node should be low, we can avoid doing warp / block level reduction in order to reduce overhead
@@ -348,7 +362,7 @@ namespace cuSGA {
         // Shared memory, partitioned in the following way to guarantee alignment without wasting any space:
         //      |  buffers (nodeSize_t)  |  isInQueue (bool)  |
         extern __shared__ nodeSize_t shared_buffers[];
-        const auto shared_isInQueue{shared_buffers + numWarpsPerBlock * (SHARED_FRONTIER_BUFFER_SIZE << 1)};
+        const auto shared_isInQueue{(shared_buffers + numWarpsPerBlock * (SHARED_FRONTIER_BUFFER_SIZE << 1))};
 
         // Get thread warp ID and check for thread overflow
         if (const auto warpID{(::blockIdx.x * ::blockDim.x + ::threadIdx.x) >> KernelUtils::WARP_SHIFT}; warpID < d_sequenceGraph.getNumConnectedComponents(sequenceBase)) {
@@ -392,7 +406,7 @@ namespace cuSGA {
                     const auto updatedCurrentLayerNeighborCost{currentLayerNodeCost + SequenceGraph::INSERTION_COST};
 
                     // Process neighbor
-                    processNeighbor(d_sequenceGraph, &warpFrontier, &shared_frontier, neighborIdx, updatedCurrentLayerNeighborCost, laneIdx);
+                    processNeighbor(d_sequenceGraph, &warpFrontier, &shared_frontier, sequenceBase, neighborIdx, updatedCurrentLayerNeighborCost, laneIdx);
                 }
             }
 
@@ -426,7 +440,7 @@ namespace cuSGA {
                         const auto updatedCurrentLayerNeighborCost{currentLayerNodeCost + SequenceGraph::INSERTION_COST};
 
                         // Process neighbor
-                        processNeighbor(d_sequenceGraph, &warpFrontier, &shared_frontier, neighborIdx, updatedCurrentLayerNeighborCost, laneIdx);
+                        processNeighbor(d_sequenceGraph, &warpFrontier, &shared_frontier, sequenceBase, neighborIdx, updatedCurrentLayerNeighborCost, laneIdx);
                     }
                 }
 
@@ -449,7 +463,7 @@ namespace cuSGA {
                         const auto updatedCurrentLayerNeighborCost{currentLayerNodeCost + SequenceGraph::INSERTION_COST};
 
                         // Process neighbor
-                        processNeighbor(d_sequenceGraph, &warpFrontier, &shared_frontier, neighborIdx, updatedCurrentLayerNeighborCost, laneIdx);
+                        processNeighbor(d_sequenceGraph, &warpFrontier, &shared_frontier, sequenceBase, neighborIdx, updatedCurrentLayerNeighborCost, laneIdx);
                     }
                 }
 

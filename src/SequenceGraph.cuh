@@ -31,7 +31,7 @@ namespace cuSGA {
 
         // Insertions and propagations kernel
         inline constexpr targetSize_t SHARED_FRONTIER_BUFFER_SIZE{KernelUtils::WARP_SIZE};
-        __device__ __forceinline__ void processNeighbor(const SequenceGraph& d_sequenceGraph, Frontier* warpFrontier, Frontier* shared_frontier, nodeSize_t neighborIdx, cost_t updatedCurrentLayerNeighborCost, ::uint8_t laneIdx);
+        __device__ __forceinline__ void processNeighbor(const SequenceGraph& d_sequenceGraph, Frontier* warpFrontier, Frontier* shared_frontier, DNABase sequenceBase, nodeSize_t neighborIdx, cost_t updatedCurrentLayerNeighborCost, ::uint8_t laneIdx);
         __global__ void insertionsAndPropagations(SequenceGraph d_sequenceGraph, DNABase sequenceBase, targetSize_t numWarpsPerBlock, connectedComponentSize_t maxConnectedComponentSize, nodeSize_t* d_buffers);
 
         // Minimum cost kernel
@@ -62,6 +62,9 @@ namespace cuSGA {
             // Grow size for connected components mappings
             allocator->grow<::std::remove_reference_t<decltype(connectedComponentsMappings[0])>>(NUM_BASES * numNodes);
 
+            // Grow size for connected components local index mappings
+            allocator->grow<::std::remove_reference_t<decltype(connectedComponentsLocalIndexMappings[0])>>(NUM_BASES * numNodes);
+
             // Grow size for costs double buffer
             DoubleBuffer<cost_t>::growBuffers(allocator, numNodes);
 
@@ -81,6 +84,9 @@ namespace cuSGA {
             // Grow size for connected components mappings
             allocator->grow<::std::remove_reference_t<decltype(connectedComponentsMappings[0])>>(NUM_BASES * numNodes);
 
+            // Grow size for connected components local index mappings
+            allocator->grow<::std::remove_reference_t<decltype(connectedComponentsLocalIndexMappings[0])>>(NUM_BASES * numNodes);
+
             // Grow size for costs double buffer
             DoubleBuffer<cost_t>::growBuffers(allocator, numNodes);
 
@@ -94,7 +100,7 @@ namespace cuSGA {
         __host__ SequenceGraph(const ::std::string& pangenomeGraphFileName, const ::std::string& sequenceFileName, ::std::string const (& connectedComponentsFileNames)[NUM_BASES], bool ownsInstance, SequenceGraph* pinned_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
 
         // Sequence graph constructor
-        __host__ __device__ __forceinline__ SequenceGraph(const PangenomeGraph& pangenomeGraph, const PackedDNASequence& sequence, connectedComponentSize_t const (& numConnectedComponents)[NUM_BASES], nodeSize_t* const (& connectedComponentsOffsets)[NUM_BASES], nodeSize_t* const (& connectedComponentsMappings)[NUM_BASES], connectedComponentSize_t const (& maxConnectedComponentsSizes)[NUM_BASES], const DoubleBuffer<cost_t>& costsDoubleBuffer, const scoreSize_t numScores, cost_t* const scores, const bool ownsInstance, SequenceGraph* const pinned_instance = nullptr, SequenceGraph* const d_instance = nullptr) : pangenomeGraph{pangenomeGraph}, sequence{sequence}, costsDoubleBuffer{costsDoubleBuffer}, numScores{numScores}, scores{scores}, ownsInstance{ownsInstance}, pinned_instance{pinned_instance}, d_instance{d_instance} {
+        __host__ __device__ __forceinline__ SequenceGraph(const PangenomeGraph& pangenomeGraph, const PackedDNASequence& sequence, connectedComponentSize_t const (& numConnectedComponents)[NUM_BASES], nodeSize_t* const (& connectedComponentsOffsets)[NUM_BASES], nodeSize_t* const (& connectedComponentsMappings)[NUM_BASES], connectedComponentSize_t* const (& connectedComponentsLocalIndexMappings)[NUM_BASES], connectedComponentSize_t const (& maxConnectedComponentsSizes)[NUM_BASES], const DoubleBuffer<cost_t>& costsDoubleBuffer, const scoreSize_t numScores, cost_t* const scores, const bool ownsInstance, SequenceGraph* const pinned_instance = nullptr, SequenceGraph* const d_instance = nullptr) : pangenomeGraph{pangenomeGraph}, sequence{sequence}, costsDoubleBuffer{costsDoubleBuffer}, numScores{numScores}, scores{scores}, ownsInstance{ownsInstance}, pinned_instance{pinned_instance}, d_instance{d_instance} {
 #pragma unroll
             for (DNABase_t baseIdx{0}; baseIdx < NUM_BASES; ++baseIdx) {
                 // Set number of connected components
@@ -105,6 +111,9 @@ namespace cuSGA {
 
                 // Set connected components mappings
                 this->connectedComponentsMappings[baseIdx] = connectedComponentsMappings[baseIdx];
+
+                // Set connected component local index mappings
+                this->connectedComponentsLocalIndexMappings[baseIdx] = connectedComponentsLocalIndexMappings[baseIdx];
 
                 // Set max connected components sizes
                 this->maxConnectedComponentsSizes[baseIdx] = maxConnectedComponentsSizes[baseIdx];
@@ -155,6 +164,11 @@ namespace cuSGA {
         // Get max connected component size for a given character graph DNA base
         __host__ __device__ __forceinline__ connectedComponentSize_t getMaxConnectedComponentSize(const DNABase characterGraphBase) const {
             return maxConnectedComponentsSizes[static_cast<DNABase_t>(characterGraphBase)];
+        }
+
+        // Get connected component local index mapping for a given character graph DNA base and node index
+        __host__ __device__ __forceinline__ connectedComponentSize_t getConnectedComponentLocalIndexMapping(const DNABase characterGraphBase, const nodeSize_t nodeIdx) const {
+            return connectedComponentsLocalIndexMappings[static_cast<DNABase_t>(characterGraphBase)][nodeIdx];
         }
 
         // Get costs double buffer
@@ -210,6 +224,7 @@ namespace cuSGA {
                 this->numConnectedComponents[baseIdx] = ::__shfl_sync(mask, numConnectedComponents[baseIdx], srcLaneIdx);
                 this->connectedComponentsOffsets[baseIdx] = reinterpret_cast<::std::remove_reference_t<decltype(connectedComponentsOffsets[0])>>(::__shfl_sync(mask, reinterpret_cast<unsigned long long>(connectedComponentsOffsets[baseIdx]), srcLaneIdx));
                 this->connectedComponentsMappings[baseIdx] = reinterpret_cast<::std::remove_reference_t<decltype(connectedComponentsMappings[0])>>(::__shfl_sync(mask, reinterpret_cast<unsigned long long>(connectedComponentsMappings[baseIdx]), srcLaneIdx));
+                this->connectedComponentsLocalIndexMappings[baseIdx] = reinterpret_cast<::std::remove_reference_t<decltype(connectedComponentsLocalIndexMappings[0])>>(::__shfl_sync(mask, reinterpret_cast<unsigned long long>(connectedComponentsLocalIndexMappings[baseIdx]), srcLaneIdx));
                 this->maxConnectedComponentsSizes[baseIdx] = ::__shfl_sync(mask, maxConnectedComponentsSizes[baseIdx], srcLaneIdx);
             }
             this->costsDoubleBuffer.shuffle_sync(mask, srcLaneIdx);
@@ -322,7 +337,7 @@ namespace cuSGA {
                 int minGridSize{0};
                 CUDA_CHECK(::cudaOccupancyMaxPotentialBlockSizeVariableSMem(&minGridSize, &blockSize, SequenceGraphKernels::minCost, SMemCalculator, 0));
                 blockSize &= ~(KernelUtils::WARP_SIZE - 1);
-                blockSize = (cachedBlockSize < KernelUtils::WARP_SIZE) ? KernelUtils::WARP_SIZE : cachedBlockSize;
+                blockSize = (blockSize < KernelUtils::WARP_SIZE) ? KernelUtils::WARP_SIZE : blockSize;
 
                 // Cache block size
                 cachedBlockSize = blockSize;
@@ -346,6 +361,7 @@ namespace cuSGA {
         connectedComponentSize_t numConnectedComponents[NUM_BASES]{};
         nodeSize_t* connectedComponentsOffsets[NUM_BASES]{nullptr};
         nodeSize_t* connectedComponentsMappings[NUM_BASES]{nullptr};
+        connectedComponentSize_t* connectedComponentsLocalIndexMappings[NUM_BASES]{nullptr};
         connectedComponentSize_t maxConnectedComponentsSizes[NUM_BASES]{};
         DoubleBuffer<cost_t> costsDoubleBuffer{};
         scoreSize_t numScores{0};
@@ -356,7 +372,7 @@ namespace cuSGA {
     };
 
     // Insertions and propagations helper function
-    __device__ __forceinline__ void SequenceGraphKernels::processNeighbor(const SequenceGraph& d_sequenceGraph, Frontier* const warpFrontier, Frontier* const shared_frontier, const nodeSize_t neighborIdx, const cost_t updatedCurrentLayerNeighborCost, const ::uint8_t laneIdx) {
+    __device__ __forceinline__ void SequenceGraphKernels::processNeighbor(const SequenceGraph& d_sequenceGraph, Frontier* const warpFrontier, Frontier* const shared_frontier, DNABase sequenceBase, const nodeSize_t neighborIdx, const cost_t updatedCurrentLayerNeighborCost, const ::uint8_t laneIdx) {
         // Set cost to atomic min and get previous current layer neighbor cost
         // NOTE: Because in-degree for a node should be low, we can avoid doing warp / block level reduction in order to reduce overhead
         const auto previousCurrentLayerNeighborCost{::atomicMin(&d_sequenceGraph.getCostsDoubleBuffer().current()[neighborIdx], updatedCurrentLayerNeighborCost)};
@@ -365,7 +381,8 @@ namespace cuSGA {
         const auto activeMask{::__activemask()};
 
         // Check for improvement
-        bool wantsToInsert{(updatedCurrentLayerNeighborCost < previousCurrentLayerNeighborCost) && shared_frontier->isNodeInQueue(neighborIdx)};
+        const auto localNeighborIdx{d_sequenceGraph.getConnectedComponentLocalIndexMapping(sequenceBase, neighborIdx)};
+        bool wantsToInsert{(updatedCurrentLayerNeighborCost < previousCurrentLayerNeighborCost) && shared_frontier->isNodeInQueue(localNeighborIdx)};
 
         // Deduplicate frontier queue insertions: only thread with lowest thread index inserts
         if (wantsToInsert) {
@@ -390,15 +407,15 @@ namespace cuSGA {
 
         // Check if thread passed deduplication check
         if (wantsToInsert) {
-        // Get insertion offset and check if inserting in shared or global frontier
-        if (const auto insertionOffset{::__popc(improvedMask & ((1u << laneIdx) - 1))}; insertionOffset < numInsertionsInSharedFrontier) {
-            // Insert node into next shared frontier
-            shared_frontier->atomicInsertNodeInQueue(neighborIdx, shared_frontier->getQueueSize() + insertionOffset);
-        }
-        else {
-            // Insert node into next global frontier
-            warpFrontier->atomicInsertNodeInQueue(neighborIdx, warpFrontier->getQueueSize() + insertionOffset - numInsertionsInSharedFrontier);
-        }
+            // Get insertion offset and check if inserting in shared or global frontier
+            if (const auto insertionOffset{::__popc(improvedMask & ((1u << laneIdx) - 1))}; insertionOffset < numInsertionsInSharedFrontier) {
+                // Insert node into next shared frontier
+                shared_frontier->atomicInsertNodeInQueue(neighborIdx, shared_frontier->getQueueSize() + insertionOffset);
+            }
+            else {
+                // Insert node into next global frontier
+                warpFrontier->atomicInsertNodeInQueue(neighborIdx, warpFrontier->getQueueSize() + insertionOffset - numInsertionsInSharedFrontier);
+            }
         }
 
         // Grow queue size

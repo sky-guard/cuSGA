@@ -49,6 +49,20 @@ namespace cuSGA {
         this->columnValues = allocator->emplaceReserve<::std::remove_reference_t<decltype(columnValues[0])>>(numEdges);
         this->rowOffsets = allocator->emplaceReserve<::std::remove_reference_t<decltype(rowOffsets[0])>>(numNodes + 1);
 
+        // Read row offsets from file
+        for (nodeSize_t rowOffsetIdx{0}; rowOffsetIdx <= numNodes; ++rowOffsetIdx) {
+            if (!(file >> rowOffsets[rowOffsetIdx])) {
+                throw ::std::runtime_error{::std::format("An error occurred while reading CSR row offsets from file: {}", fileName)};
+            }
+        }
+
+        // Read column values from file
+        for (edgeSize_t edgeIdx{0}; edgeIdx < numEdges; ++edgeIdx) {
+            if (!(file >> columnValues[edgeIdx])) {
+                throw ::std::runtime_error{::std::format("An error occurred while reading CSR column values from file: {}", fileName)};
+            }
+        }
+
         // Close file
         file.close();
     }
