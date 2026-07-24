@@ -152,7 +152,7 @@ namespace cuSGA {
         const auto d_rowOffsets{allocator->cudaEmplaceCopy<::std::remove_reference_t<decltype(rowOffsets[0])>>(rowOffsets, ::cudaMemcpyHostToDevice, baseValues.getNumBases() + 1, false, cudaStreamDefault)};
 
         // Create temporary host instance holding the device pointers
-        const PangenomeGraph d_pangenomeGraph{numEdges, d_baseValues, d_columnValues, d_rowOffsets, ownsInstance, pinned_instance, d_pangenomeGraph};
+        const PangenomeGraph d_pangenomeGraph{numEdges, d_baseValues, d_columnValues, d_rowOffsets, ownsInstance, pinned_instance, d_instance};
 
         // Emplace instance
         if (ownsInstance) {

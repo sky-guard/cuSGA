@@ -15,7 +15,7 @@ namespace cuSGA::KernelUtils {
 #define CUDA_CHECK(result) ::cuSGA::KernelUtils::cudaCheck((result), __FILE__, __LINE__)
 
     // CUDA_CHECK helper
-    __host__ __device__ __forceinline__ inline void cudaCheck(const ::cudaError_t result, const char* const file, const targetSize_t line) {
+    __host__ __device__ __forceinline__ void cudaCheck(const ::cudaError_t result, const char* const file, const targetSize_t line) {
         if (result != ::cudaSuccess) {
             ::printf("CUDA Error at %s:%u\n%s\n", file, line, ::cudaGetErrorString(result));
         }
@@ -29,27 +29,12 @@ namespace cuSGA::KernelUtils {
     template <const auto Kernel, const targetSize_t dynamicSMemSize = 0, const ::size_t blockSizeLimit = 0>
     __host__ __device__ __forceinline__ targetSize_t cudaSizeBlock() {
         // Compute optimal block size if necessary
-        static targetSize_t blockSize{0};
+        static int blockSize{0};
         if (blockSize == 0) {
             // Forward call
-            targetSize_t minGridSize{0};
+            int minGridSize{0};
             CUDA_CHECK(::cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, Kernel, dynamicSMemSize, blockSizeLimit));
         }
-
-        return blockSize;
-    }
-
-    // Size block helper
-    template <const auto Kernel, typename BlockSizeToDynamicSMemSizeCalculator>
-    __host__ __device__ __forceinline__ targetSize_t cudaSizeBlockWithDynamicSMem(BlockSizeToDynamicSMemSizeCalculator calculator) {
-        // Compute optimal block size if necessary
-        auto blockSize{calculator->blockSize};
-        if (blockSize == 0) {
-        }
-        // Forward call
-        targetSize_t minGridSize{0};
-        CUDA_CHECK(::cudaOccupancyMaxPotentialBlockSizeVariableSMem(&minGridSize, &calculator->blockSize, Kernel, calculator, 0));
-        blockSize = calculator->blockSize;
 
         return blockSize;
     }
@@ -61,7 +46,7 @@ namespace cuSGA::KernelUtils {
 
     // Kernel helper
     template <const auto Kernel, typename... Args>
-    __host__ __device__ __forceinline__ void cudaLaunchKernel(const targetSize_t gridSize, const targetSize_t blockSize, const targetSize_t dynamicSMemSize, const cudaStream_t& stream, Args&&... args) {
+    __host__ __forceinline__ void cudaLaunchKernel(const targetSize_t gridSize, const targetSize_t blockSize, const targetSize_t dynamicSMemSize, const cudaStream_t& stream, Args&&... args) {
         // Launch kernel
         Kernel<<<gridSize, blockSize, dynamicSMemSize, stream>>>(::std::forward<Args>(args)...);
 
@@ -128,7 +113,7 @@ namespace cuSGA::KernelUtils {
                 return nullptr;
             }
 
-            return alignedCurrentPtr;
+            return reinterpret_cast<const T*>(alignedCurrentPtr);
         }
 
         // Set size
@@ -237,7 +222,7 @@ namespace cuSGA::KernelUtils {
 
         // Emplace using cudaMemcpy and bump pointer
         template <typename T>
-        __host__ __device__ __forceinline__ T* cudaEmplaceCopy(const T* src, const ::cudaMemcpyKind kind, const targetSize_t count = 1, const bool sync = true, const ::cudaStream_t& stream = cudaStreamDefault) {
+        __host__ __forceinline__ T* cudaEmplaceCopy(const T* src, const ::cudaMemcpyKind kind, const targetSize_t count = 1, const bool sync = true, const ::cudaStream_t& stream = cudaStreamDefault) {
             // Get total size
             const auto totalSize{count * sizeof(T)};
 
@@ -262,7 +247,7 @@ namespace cuSGA::KernelUtils {
 
         // Emplace using cudaMemset and bump pointer
         template <typename T>
-        __host__ __device__ __forceinline__ T* cudaEmplaceSet(const int value, const targetSize_t count = 1, const bool sync = true, const ::cudaStream_t& stream = cudaStreamDefault) {
+        __host__ __forceinline__ T* cudaEmplaceSet(const int value, const targetSize_t count = 1, const bool sync = true, const ::cudaStream_t& stream = cudaStreamDefault) {
             // Get total size
             const auto totalSize{count * sizeof(T)};
 
@@ -305,7 +290,7 @@ namespace cuSGA::KernelUtils {
         }
 
         // Initialize using device global memory
-        __host__ __device__ __forceinline__ void initCudaGMem() {
+        __host__ __forceinline__ void initCudaGMem() {
             // Cuda malloc memory
             void* d_ptr{nullptr};
             CUDA_CHECK(::cudaMalloc(&d_ptr, size));
@@ -315,7 +300,7 @@ namespace cuSGA::KernelUtils {
         }
 
         // Initialize asynchronously using device global memory
-        __host__ __device__ __forceinline__ void initCudaGMemAsync(const cudaStream_t& stream = cudaStreamDefault) {
+        __host__ __forceinline__ void initCudaGMemAsync(const cudaStream_t& stream = cudaStreamDefault) {
             // Cuda malloc memory
             void* d_ptr{nullptr};
             CUDA_CHECK(::cudaMallocAsync(&d_ptr, size, stream));
@@ -375,7 +360,7 @@ namespace cuSGA::KernelUtils {
             // Bump pointer
             this->ptr = newPtr;
 
-            return alignedCurrentPtr;
+            return reinterpret_cast<T*>(alignedCurrentPtr);
         }
     };
 } // cuSGA::KernelUtils

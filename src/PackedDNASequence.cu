@@ -30,9 +30,6 @@ namespace cuSGA {
             throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", fileName)};
         }
 
-        // Close file
-        file.close();
-
         // Grow allocator
         if (ownsInstance) {
             allocator->emplaceReserve<PackedDNASequence>();
@@ -54,6 +51,9 @@ namespace cuSGA {
         this->numChunks = (maxNumBases + PACKING_FACTOR - 1) >> PACK_SHIFT;
         this->bases = allocator->emplaceReserve<::std::remove_reference_t<decltype(bases[0])>>(numChunks);
         this->ownsInstance = ownsInstance;
+
+        // Close file
+        file.close();
     }
 
     __host__ PackedDNASequence::PackedDNASequence(const ::std::string& fileName, ::std::ifstream* const file, const bool ownsInstance, ::std::optional<sequenceSize_t> numBasesOptional, PackedDNASequence* const pinned_instanceOptional, KernelUtils::BumpPtrAllocator* const allocatorOptional) : PackedDNASequence{0, 0, nullptr, ownsInstance, pinned_instanceOptional} {

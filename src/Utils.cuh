@@ -16,7 +16,7 @@ namespace cuSGA {
         inline constexpr ::uint8_t BYTE_SIZE{8};
 
         // Open file and check for errors
-        __host__ __forceinline__ inline ::std::ifstream openFile(const std::string& fileName) {
+        __host__ __forceinline__ ::std::ifstream openFile(const std::string& fileName) {
             // Create input file stream
             ::std::ifstream file{fileName};
 

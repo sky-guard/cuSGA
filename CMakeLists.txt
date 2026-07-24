@@ -35,4 +35,6 @@ add_executable(cuSGA src/main.cu
 set_target_properties(cuSGA PROPERTIES
         CUDA_SEPARABLE_COMPILATION ON)
 
+target_compile_options(cuSGA PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--extended-lambda>)
+
 target_link_libraries(cuSGA PRIVATE CLI11::CLI11)

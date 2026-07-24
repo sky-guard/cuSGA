@@ -28,9 +28,6 @@ namespace cuSGA {
             throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", pangenomeGraphFileName)};
         }
 
-        // Close pangenome graph file
-        pangenomeGraphFile.close();
-
         // Open sequence file
         auto sequenceFile{Utils::openFile(sequenceFileName)};
 
@@ -46,26 +43,22 @@ namespace cuSGA {
             throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", sequenceFileName)};
         }
 
-        // Close sequence file
-        sequenceFile.close();
-
+        // Read total number of connected components from files
+        ::std::ifstream connectedComponentsFiles[NUM_BASES]{};
         connectedComponentSize_t totalNumConnectedComponents{0};
+        connectedComponentSize_t numConnectedComponents[NUM_BASES]{};
 #pragma unroll
         for (DNABase_t baseIdx{0}; baseIdx < NUM_BASES; ++baseIdx) {
             // Open connected components file
-            auto connectedComponentsFile{Utils::openFile(connectedComponentsFileNames[baseIdx])};
+            connectedComponentsFiles[baseIdx] = Utils::openFile(connectedComponentsFileNames[baseIdx]);
 
             // Read number of connected components from file
-            connectedComponentSize_t numConnectedComponents{0};
-            if (!(connectedComponentsFile >> numConnectedComponents)) {
+            if (!(connectedComponentsFiles[baseIdx] >> numConnectedComponents[baseIdx])) {
                 throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", connectedComponentsFileNames[baseIdx])};
             }
 
             // Accumulate number of connected components
-            totalNumConnectedComponents += numConnectedComponents;
-
-            // Close sequence file
-            connectedComponentsFile.close();
+            totalNumConnectedComponents += numConnectedComponents[baseIdx];
         }
 
         // Grow allocator
@@ -85,55 +78,59 @@ namespace cuSGA {
         }
         this->pangenomeGraph = PangenomeGraph{pangenomeGraphFileName, false, &pinned_instance->pangenomeGraph, allocator};
         this->sequence = PackedDNASequence{sequenceFileName, false, &pinned_instance->sequence, allocator};
-        // ...
-        // TODO: read remaining attributes, kernel to find maxs or not?
+        const auto connectedComponentsOffsetsBase{allocator->emplaceReserve<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsOffsets[0])>>>(totalNumConnectedComponents + NUM_BASES)};
+        const auto connectedComponentsMappingsBase{allocator->emplaceReserve<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsMappings[0])>>>(NUM_BASES * numNodes)};
+        connectedComponentSize_t connectedComponentsCounter{0};
+#pragma unroll
+        for (DNABase_t baseIdx{0}; baseIdx < NUM_BASES; ++baseIdx) {
+            // Get connected components file
+            auto connectedComponentsFile{std::move(connectedComponentsFiles[baseIdx])};
+
+            // Set number of connected components
+            const auto numConnectedComponentsValue{numConnectedComponents[baseIdx]};
+            this->numConnectedComponents[baseIdx] = numConnectedComponentsValue;
+
+            // Read connected components offsets from file
+            const auto connectedComponentsOffsets{connectedComponentsOffsetsBase + connectedComponentsCounter};
+            for (connectedComponentSize_t connectedComponentIdx{0}; connectedComponentIdx < numConnectedComponentsValue + 1; ++connectedComponentIdx) {
+                if (!(connectedComponentsFile >> connectedComponentsOffsets[connectedComponentIdx])) {
+                    throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", connectedComponentsFileNames[baseIdx])};
+                }
+            }
+            this->connectedComponentsOffsets[baseIdx] = connectedComponentsOffsets;
+
+            // Read connected components mappings from file
+            const auto connectedComponentsMappings{connectedComponentsMappingsBase + baseIdx * numNodes};
+            for (nodeSize_t nodeIdx{0}; nodeIdx < numNodes; ++nodeIdx) {
+                if (!(connectedComponentsFile >> connectedComponentsMappings[nodeIdx])) {
+                    throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", connectedComponentsFileNames[baseIdx])};
+                }
+            }
+            this->connectedComponentsMappings[baseIdx] = connectedComponentsMappings;
+
+            // Find max connected component size for this base
+            connectedComponentSize_t maxConnectedComponentsSize{0};
+            for (connectedComponentSize_t connectedComponentIdx{0}; connectedComponentIdx < numConnectedComponentsValue; ++connectedComponentIdx) {
+                const auto currentConnectedComponentSize{connectedComponentsOffsets[connectedComponentIdx + 1] - connectedComponentsOffsets[connectedComponentIdx]};
+                maxConnectedComponentsSize = ::std::max(maxConnectedComponentsSize, currentConnectedComponentSize);
+            }
+            this->maxConnectedComponentsSizes[baseIdx] = maxConnectedComponentsSize;
+
+            // Increase number of connected components counter
+            connectedComponentsCounter += (numConnectedComponents[baseIdx] + 1);
+
+            // Close connected components file
+            connectedComponentsFile.close();
+        }
         this->costsDoubleBuffer = DoubleBuffer{numNodes, false, &pinned_instance->costsDoubleBuffer, allocator};
         this->numScores = numScores;
         this->scores = allocator->emplaceSet<::std::remove_pointer_t<decltype(scores)>>(-1, numScores);
 
-        // TODO
-        // Read connected components from files
-        ::size_t numConnectedComponents[NUM_BASES]{};
-        ::size_t* connectedComponentsOffsets[NUM_BASES]{nullptr};
-        ::size_t* connectedComponentsMappings[NUM_BASES]{nullptr};
-#pragma unroll
-        for (::size_t i{0}; i < NUM_BASES; ++i) {
-            // Open connected components file
-            const auto connectedComponentsFileName{connectedComponentsFileNames[i]};
-            ::std::ifstream connectedComponentsFile{connectedComponentsFileName};
-            if (!connectedComponentsFile.is_open()) {
-                throw ::std::runtime_error{::std::format("Unable to open file: {}", connectedComponentsFileName)};
-            }
+        // Close pangenome graph file
+        pangenomeGraphFile.close();
 
-            // Read number of connected components from file
-            ::size_t numConnectedComponentsValue{0};
-            if (!(connectedComponentsFile >> numConnectedComponentsValue)) {
-                throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", connectedComponentsFileName)};
-            }
-            numConnectedComponents[i] = numConnectedComponentsValue;
-
-            // Read connected components offsets from file
-            const auto connectedComponentsOffsetsValue{new ::size_t[numConnectedComponentsValue + 1]{}};
-            for (::size_t j{0}; j < numConnectedComponentsValue + 1; ++j) {
-                ::size_t connectedComponentsOffset{0};
-                if (!(connectedComponentsFile >> connectedComponentsOffset)) {
-                    throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", connectedComponentsFileName)};
-                }
-                connectedComponentsOffsetsValue[j] = connectedComponentsOffset;
-            }
-            connectedComponentsOffsets[i] = connectedComponentsOffsetsValue;
-
-            // Read connected components mappings from file
-            const auto connectedComponentsMappingsValue{new ::size_t[numNodes]{}};
-            for (::size_t j{0}; j < numNodes; ++j) {
-                ::size_t connectedComponentsMapping{0};
-                if (!(connectedComponentsFile >> connectedComponentsMapping)) {
-                    throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", connectedComponentsFileName)};
-                }
-                connectedComponentsMappingsValue[j] = connectedComponentsMapping;
-            }
-            connectedComponentsMappings[i] = connectedComponentsMappingsValue;
-        }
+        // Close sequence file
+        sequenceFile.close();
     }
 
     __host__ SequenceGraph SequenceGraph::copyToDevice(SequenceGraph* d_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) {
@@ -176,7 +173,7 @@ namespace cuSGA {
 
         // Emplace buffers
         const auto d_pangenomeGraph{pangenomeGraph.copyToDevice(&d_instance->pangenomeGraph, allocator)};
-        const auto d_connectedComponentsOffsetsBase{allocator->cudaEmplaceCopy<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsOffsets[0])>>>(connectedComponentsOffsets[0], ::cudaMemcpyHostToDevice, totalNumConnectedComponents, false, cudaStreamDefault)};
+        const auto d_connectedComponentsOffsetsBase{allocator->cudaEmplaceCopy<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsOffsets[0])>>>(connectedComponentsOffsets[0], ::cudaMemcpyHostToDevice, totalNumConnectedComponents + NUM_BASES, false, cudaStreamDefault)};
         const auto d_connectedComponentsOffsetsMappingsBase{allocator->cudaEmplaceCopy<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsMappings[0])>>>(connectedComponentsMappings[0], ::cudaMemcpyHostToDevice, NUM_BASES * pangenomeGraph.getNumNodes(), false, cudaStreamDefault)};
         nodeSize_t* d_connectedComponentsOffsets[NUM_BASES]{nullptr};
         nodeSize_t* d_connectedComponentsMappings[NUM_BASES]{nullptr};
@@ -185,7 +182,7 @@ namespace cuSGA {
         for (DNABase_t baseIdx{0}; baseIdx < NUM_BASES; ++baseIdx) {
             d_connectedComponentsOffsets[baseIdx] = d_connectedComponentsOffsetsBase + connectedComponentsCounter;
             d_connectedComponentsMappings[baseIdx] = d_connectedComponentsOffsetsMappingsBase + baseIdx * pangenomeGraph.getNumNodes();
-            connectedComponentsCounter += numConnectedComponents[baseIdx];
+            connectedComponentsCounter += (numConnectedComponents[baseIdx] + 1);
         }
         const auto d_costsDoubleBuffer{costsDoubleBuffer.copyToDevice(&d_instance->costsDoubleBuffer, allocator)};
         const auto d_scores{allocator->cudaEmplaceCopy<::std::remove_pointer_t<decltype(scores)>>(scores, ::cudaMemcpyHostToDevice, numScores, false, cudaStreamDefault)};
@@ -222,7 +219,7 @@ namespace cuSGA {
         }
     }
 
-    __host__ cost_t* SequenceGraph::align(const ::std::string& sequenceFileName, nodeSize_t* const d_buffers) {
+    __host__ cost_t* SequenceGraph::align(const ::std::string& sequenceFileName) {
         // Open file
         ::std::ifstream sequenceFile{sequenceFileName};
         if (!sequenceFile.is_open()) {
@@ -231,6 +228,10 @@ namespace cuSGA {
 
         // Copy sequence graph instance to device
         copyToDevice();
+
+        // Allocate additional device buffers
+        nodeSize_t *d_buffers{nullptr};
+        CUDA_CHECK(cudaMallocAsync(&d_buffers, DoubleBuffer<nodeSize_t>::NUM_DOUBLE_BUFFERS * pangenomeGraph.getNumNodes() * sizeof(nodeSize_t), cudaStreamDefault));
 
         // Loop over all sequences in the input file
         scoreSize_t scoreIdx{0};
@@ -273,6 +274,9 @@ namespace cuSGA {
 
         // Copy over scores from device
         const auto scores{h2d_getScores()};
+
+        // Free additional device buffers
+        cudaFreeAsync(d_buffers, cudaStreamDefault);
 
         return scores;
     }
@@ -330,56 +334,6 @@ namespace cuSGA {
             // NOTE: Because deletions are run before propagations and used as an "initialization step" for layers different from the first, we don't need to use atomics
             d_sequenceGraph.getCostsDoubleBuffer().current()[nodeIdx] = currentLayerNodeCost;
         }
-    }
-
-    __device__ __forceinline__ void SequenceGraphKernels::processNeighbor(const SequenceGraph& d_sequenceGraph, Frontier* const warpFrontier, Frontier* const shared_frontier, const nodeSize_t neighborIdx, const cost_t updatedCurrentLayerNeighborCost, const ::uint8_t laneIdx) {
-        // Set cost to atomic min and get previous current layer neighbor cost
-        // NOTE: Because in-degree for a node should be low, we can avoid doing warp / block level reduction in order to reduce overhead
-        const auto previousCurrentLayerNeighborCost{::atomicMin(&d_sequenceGraph.getCostsDoubleBuffer().current()[neighborIdx], updatedCurrentLayerNeighborCost)};
-
-        // Get active mask
-        const auto activeMask{::__activemask()};
-
-        // Check for improvement
-        bool wantsToInsert{(updatedCurrentLayerNeighborCost < previousCurrentLayerNeighborCost) && shared_frontier->isNodeInQueue(neighborIdx)};
-
-        // Deduplicate frontier queue insertions: only thread with lowest thread index inserts
-        if (wantsToInsert) {
-            // Finds a bitmask of all active threads in the warp that have the exact same neighbor index
-            unsigned matchingNeighborIdxMask{0};
-            asm volatile("match.any.sync.b32 %0, %1, %2;"
-                        : "=r"(matchingNeighborIdxMask)
-                        : "r"(neighborIdx), "r"(activeMask));
-
-            // Get the lowest lane ID among the threads that matched with this neighbor index and set improved to false for others
-            const auto lowestMatchingLane{::__ffs(static_cast<int>(matchingNeighborIdxMask)) - 1};
-            wantsToInsert = (laneIdx == lowestMatchingLane);
-        }
-
-        // Get improved mask
-        const auto improvedMask{::__ballot_sync(activeMask, wantsToInsert)};
-
-        // Get number of insertions
-        const auto numInsertions{::__popc(improvedMask)};
-        const auto numInsertionsInSharedFrontier = ::min(numInsertions, SHARED_FRONTIER_BUFFER_SIZE - shared_frontier->getQueueSize());
-        const auto numInsertionsInGlobalFrontier = numInsertions - numInsertionsInSharedFrontier;
-
-        // Check if thread passed deduplication check
-        if (wantsToInsert) {
-            // Get insertion offset and check if inserting in shared or global frontier
-            if (const auto insertionOffset{::__popc(improvedMask & ((1u << laneIdx) - 1))}; insertionOffset < numInsertionsInSharedFrontier) {
-                // Insert node into next shared frontier
-                shared_frontier->atomicInsertNodeInQueue(neighborIdx, shared_frontier->getQueueSize() + insertionOffset);
-            }
-            else {
-                // Insert node into next global frontier
-                warpFrontier->atomicInsertNodeInQueue(neighborIdx, warpFrontier->getQueueSize() + insertionOffset - numInsertionsInSharedFrontier);
-            }
-        }
-
-        // Grow queue size
-        shared_frontier->growQueueSize(numInsertionsInSharedFrontier);
-        warpFrontier->growQueueSize(numInsertionsInGlobalFrontier);
     }
 
     __global__ void SequenceGraphKernels::insertionsAndPropagations(const SequenceGraph d_sequenceGraph, const DNABase sequenceBase, const targetSize_t numWarpsPerBlock, const connectedComponentSize_t maxConnectedComponentSize, nodeSize_t* const d_buffers) { // NOLINT

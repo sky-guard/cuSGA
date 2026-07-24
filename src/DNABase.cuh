@@ -25,7 +25,7 @@ namespace cuSGA {
     // DNA base conversion functions
     namespace DNABaseConversion {
         // Get character for a given DNA base
-        __host__ __forceinline__ inline char DNABaseToChar(const DNABase base) {
+        __host__ __forceinline__ char DNABaseToChar(const DNABase base) {
             auto baseValue{static_cast<DNABase_t>(base)};
             if (baseValue > NUM_BASES - 1) {
                 throw ::std::runtime_error{::std::format("Unable to convert following DNA base to character: {}", baseValue)};
@@ -34,7 +34,7 @@ namespace cuSGA {
         }
 
         // Get DNA base for a given character
-        __host__ __forceinline__ inline DNABase charToDNABase(const char c) {
+        __host__ __forceinline__ DNABase charToDNABase(const char c) {
             switch (c) {
                 case 'A': return DNABase::A;
                 case 'C': return DNABase::C;

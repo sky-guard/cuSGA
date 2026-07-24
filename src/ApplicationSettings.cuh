@@ -23,7 +23,7 @@ namespace cuSGA::ApplicationSettings {
     inline constexpr auto PANGENOME_GRAPH_FILE_NAME_DESCRIPTION{"The path to the file containing the CSR representation of the Pangenome Graph to align to."};
 
     // Connected components file names
-    inline constexpr auto CONNECTED_COMPONENTS_FILE_NAMES_FLAG{"-cc,--connected-components"};
+    inline constexpr auto CONNECTED_COMPONENTS_FILE_NAMES_FLAG{"-c,--connected-components"};
     inline constexpr auto CONNECTED_COMPONENTS_FILE_NAMES_DESCRIPTION{"The paths to the files containing the Connected Components of the Character Graphs for the given Pangenome Graph. The common prefix of the file names is also sufficient and cuSGA will automatically look for files with the following names: $PREFIX-components-{A, C, G, T}."};
     inline constexpr ::std::string CONNECTED_COMPONENTS_FILE_NAME_SUFFIXES[]{"-components-A", "-components-C", "-components-G", "-components-T"};
 
@@ -55,7 +55,8 @@ namespace cuSGA::ApplicationSettings {
         // Parse application arguments
         try {
             app.parse(argc, argv);
-        } catch (const ::CLI::ParseError& parseError) {
+        }
+        catch (const ::CLI::ParseError& parseError) {
             app.exit(parseError);
             throw;
         }

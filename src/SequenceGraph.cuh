@@ -57,7 +57,7 @@ namespace cuSGA {
             PackedDNASequence::growBuffers(allocator, maxSequenceLength);
 
             // Grow size for connected components offsets
-            allocator->grow<::std::remove_reference_t<decltype(connectedComponentsOffsets[0])>>(totalNumConnectedComponents);
+            allocator->grow<::std::remove_reference_t<decltype(connectedComponentsOffsets[0])>>(totalNumConnectedComponents + NUM_BASES);
 
             // Grow size for connected components mappings
             allocator->grow<::std::remove_reference_t<decltype(connectedComponentsMappings[0])>>(NUM_BASES * numNodes);
@@ -162,6 +162,11 @@ namespace cuSGA {
             return costsDoubleBuffer;
         }
 
+        // Get number of scores
+        __host__ __device__ __forceinline__ scoreSize_t getNumScores() const {
+            return numScores;
+        }
+
         // Get scores
         __host__ __device__ __forceinline__ cost_t* getScores() const {
             return scores;
@@ -216,7 +221,7 @@ namespace cuSGA {
         }
 
         // Align sequence
-        __host__ cost_t* align(const ::std::string& sequenceFileName, nodeSize_t* d_buffers);
+        __host__ cost_t* align(const ::std::string& sequenceFileName);
 
         // Launch initialize kernel
         __host__ __forceinline__ void initialize() const {
@@ -264,7 +269,7 @@ namespace cuSGA {
             // Define shared memory calculator
             const auto sequenceBase{sequence[layerIdx]};
             const auto maxConnectedComponentsSize{maxConnectedComponentsSizes[static_cast<DNABase_t>(sequenceBase)]};
-            const auto SMemCalculator = [maxConnectedComponentsSize](const targetSize_t blockSize) {
+            const auto SMemCalculator = [maxConnectedComponentsSize] __host__ __device__ (const targetSize_t blockSize) {
                 // Get number of warps in the block
                 const auto numWarps{(blockSize + KernelUtils::WARP_SIZE - 1) >> KernelUtils::WARP_SHIFT};
 
@@ -303,7 +308,7 @@ namespace cuSGA {
             static int cachedBlockSize{0};
 
             // Define shared memory calculator
-            const auto SMemCalculator = [](const targetSize_t blockSize) {
+            const auto SMemCalculator = [] __host__ __device__ (const targetSize_t blockSize) {
                 // Get number of warps in the block
                 const auto numWarps{(blockSize + KernelUtils::WARP_SIZE - 1) >> KernelUtils::WARP_SHIFT};
 
@@ -349,6 +354,57 @@ namespace cuSGA {
         SequenceGraph* pinned_instance{nullptr};
         SequenceGraph* d_instance{nullptr};
     };
+
+    // Insertions and propagations helper function
+    __device__ __forceinline__ void SequenceGraphKernels::processNeighbor(const SequenceGraph& d_sequenceGraph, Frontier* const warpFrontier, Frontier* const shared_frontier, const nodeSize_t neighborIdx, const cost_t updatedCurrentLayerNeighborCost, const ::uint8_t laneIdx) {
+        // Set cost to atomic min and get previous current layer neighbor cost
+        // NOTE: Because in-degree for a node should be low, we can avoid doing warp / block level reduction in order to reduce overhead
+        const auto previousCurrentLayerNeighborCost{::atomicMin(&d_sequenceGraph.getCostsDoubleBuffer().current()[neighborIdx], updatedCurrentLayerNeighborCost)};
+
+        // Get active mask
+        const auto activeMask{::__activemask()};
+
+        // Check for improvement
+        bool wantsToInsert{(updatedCurrentLayerNeighborCost < previousCurrentLayerNeighborCost) && shared_frontier->isNodeInQueue(neighborIdx)};
+
+        // Deduplicate frontier queue insertions: only thread with lowest thread index inserts
+        if (wantsToInsert) {
+        // Finds a bitmask of all active threads in the warp that have the exact same neighbor index
+        unsigned matchingNeighborIdxMask{0};
+        asm volatile("match.any.sync.b32 %0, %1, %2;"
+                    : "=r"(matchingNeighborIdxMask)
+                    : "r"(neighborIdx), "r"(activeMask));
+
+        // Get the lowest lane ID among the threads that matched with this neighbor index and set improved to false for others
+        const auto lowestMatchingLane{::__ffs(static_cast<int>(matchingNeighborIdxMask)) - 1};
+        wantsToInsert = (laneIdx == lowestMatchingLane);
+        }
+
+        // Get improved mask
+        const auto improvedMask{::__ballot_sync(activeMask, wantsToInsert)};
+
+        // Get number of insertions
+        const auto numInsertions{::__popc(improvedMask)};
+        const auto numInsertionsInSharedFrontier = ::min(numInsertions, SequenceGraphKernels::SHARED_FRONTIER_BUFFER_SIZE - shared_frontier->getQueueSize());
+        const auto numInsertionsInGlobalFrontier = numInsertions - numInsertionsInSharedFrontier;
+
+        // Check if thread passed deduplication check
+        if (wantsToInsert) {
+        // Get insertion offset and check if inserting in shared or global frontier
+        if (const auto insertionOffset{::__popc(improvedMask & ((1u << laneIdx) - 1))}; insertionOffset < numInsertionsInSharedFrontier) {
+            // Insert node into next shared frontier
+            shared_frontier->atomicInsertNodeInQueue(neighborIdx, shared_frontier->getQueueSize() + insertionOffset);
+        }
+        else {
+            // Insert node into next global frontier
+            warpFrontier->atomicInsertNodeInQueue(neighborIdx, warpFrontier->getQueueSize() + insertionOffset - numInsertionsInSharedFrontier);
+        }
+        }
+
+        // Grow queue size
+        shared_frontier->growQueueSize(numInsertionsInSharedFrontier);
+        warpFrontier->growQueueSize(numInsertionsInGlobalFrontier);
+    }
 } // cuSGA
 
 #endif //CUSGA_SEQUENCEGRAPH_CUH
