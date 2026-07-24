@@ -55,7 +55,7 @@ namespace cuSGA {
             const auto basePtr{allocator->emplaceReserve<T>(NUM_DOUBLE_BUFFERS * size)};
 #pragma unroll
             for (doubleBufferSize_t bufferIdx{0}; bufferIdx < NUM_DOUBLE_BUFFERS; ++bufferIdx) {
-                this->buffers[bufferIdx] = basePtr + bufferIdx * (size * sizeof(T));
+                this->buffers[bufferIdx] = basePtr + bufferIdx * size;
             }
         }
 
@@ -121,14 +121,9 @@ namespace cuSGA {
 
             // Emplace buffers
             const auto d_buffersBase{allocator->cudaEmplaceCopy<T>(buffers[0], ::cudaMemcpyHostToDevice, NUM_DOUBLE_BUFFERS * size, false, cudaStreamDefault)};
-            T* d_buffers[NUM_DOUBLE_BUFFERS]{nullptr};
-#pragma unroll
-            for (doubleBufferSize_t bufferIdx{0}; bufferIdx < NUM_DOUBLE_BUFFERS; ++bufferIdx) {
-                this->buffers[bufferIdx] = d_buffersBase + bufferIdx * (size * sizeof(T));
-            }
 
             // Create temporary host instance holding the device pointers
-            const DoubleBuffer d_doubleBuffer{size, d_buffers, selector, ownsInstance, pinned_instance, d_instance};
+            const DoubleBuffer d_doubleBuffer{size, d_buffersBase, d_buffersBase + size, selector, ownsInstance, pinned_instance, d_instance};
 
             // Emplace instance
             if (ownsInstance) {

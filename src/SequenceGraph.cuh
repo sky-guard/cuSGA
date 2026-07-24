@@ -30,7 +30,7 @@ namespace cuSGA {
         __global__ void deletions(SequenceGraph d_sequenceGraph);
 
         // Insertions and propagations kernel
-        inline constexpr targetSize_t SHARED_FRONTIER_BUFFER_SIZE{KernelUtils::WARP_SIZE << 1};
+        inline constexpr targetSize_t SHARED_FRONTIER_BUFFER_SIZE{KernelUtils::WARP_SIZE};
         __device__ __forceinline__ void processNeighbor(const SequenceGraph& d_sequenceGraph, Frontier* warpFrontier, Frontier* shared_frontier, nodeSize_t neighborIdx, cost_t updatedCurrentLayerNeighborCost, ::uint8_t laneIdx);
         __global__ void insertionsAndPropagations(SequenceGraph d_sequenceGraph, DNABase sequenceBase, targetSize_t numWarpsPerBlock, connectedComponentSize_t maxConnectedComponentSize, nodeSize_t* d_buffers);
 
@@ -76,7 +76,7 @@ namespace cuSGA {
             PangenomeGraph::growBuffers(allocator, numNodes, numEdges);
 
             // Grow size for connected components offsets
-            allocator->grow<::std::remove_reference_t<decltype(connectedComponentsOffsets[0])>>(totalNumConnectedComponents);
+            allocator->grow<::std::remove_reference_t<decltype(connectedComponentsOffsets[0])>>(totalNumConnectedComponents + NUM_BASES);
 
             // Grow size for connected components mappings
             allocator->grow<::std::remove_reference_t<decltype(connectedComponentsMappings[0])>>(NUM_BASES * numNodes);
@@ -273,7 +273,7 @@ namespace cuSGA {
                 // Get number of warps in the block
                 const auto numWarps{(blockSize + KernelUtils::WARP_SIZE - 1) >> KernelUtils::WARP_SHIFT};
 
-                return numWarps * (DoubleBuffer<nodeSize_t>::NUM_DOUBLE_BUFFERS * SequenceGraphKernels::SHARED_FRONTIER_BUFFER_SIZE * sizeof(nodeSize_t) + ((maxConnectedComponentsSize + Frontier::PACKING_FACTOR - 1) >> Frontier::PACK_SHIFT));
+                return numWarps * (DoubleBuffer<nodeSize_t>::NUM_DOUBLE_BUFFERS * SequenceGraphKernels::SHARED_FRONTIER_BUFFER_SIZE * sizeof(nodeSize_t) + ((maxConnectedComponentsSize + Frontier::PACKING_FACTOR - 1) >> Frontier::PACK_SHIFT) * sizeof(queuePack_t));
             };
 
             // Check if block size has already been computed for the given DNA base
@@ -321,8 +321,8 @@ namespace cuSGA {
                 // Get block size and round it down to be a multiple of WARP_SIZE
                 int minGridSize{0};
                 CUDA_CHECK(::cudaOccupancyMaxPotentialBlockSizeVariableSMem(&minGridSize, &blockSize, SequenceGraphKernels::minCost, SMemCalculator, 0));
-                cachedBlockSize &= ~(KernelUtils::WARP_SIZE - 1);
-                cachedBlockSize = (cachedBlockSize < KernelUtils::WARP_SIZE) ? KernelUtils::WARP_SIZE : cachedBlockSize;
+                blockSize &= ~(KernelUtils::WARP_SIZE - 1);
+                blockSize = (cachedBlockSize < KernelUtils::WARP_SIZE) ? KernelUtils::WARP_SIZE : cachedBlockSize;
 
                 // Cache block size
                 cachedBlockSize = blockSize;

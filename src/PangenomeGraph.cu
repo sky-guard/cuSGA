@@ -31,7 +31,7 @@ namespace cuSGA {
 
         // Grow allocator
         if (ownsInstance) {
-            allocator->emplaceReserve<PangenomeGraph>();
+            allocator->grow<PangenomeGraph>();
             growBuffers(allocator, numNodes, numEdges);
         }
 
@@ -82,7 +82,7 @@ namespace cuSGA {
         // Grow allocator
         if (ownsInstance) {
             allocator->emplaceReserve<PangenomeGraph>();
-            growBuffers(allocator, numNodesOptional.value(), numNodesOptional.value());
+            growBuffers(allocator, numNodesOptional.value(), numEdgesOptional.value());
         }
 
         // Initialize allocator

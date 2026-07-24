@@ -32,7 +32,7 @@ namespace cuSGA {
 
         // Grow allocator
         if (ownsInstance) {
-            allocator->emplaceReserve<PackedDNASequence>();
+            allocator->grow<PackedDNASequence>();
             growBuffers(allocator, maxNumBases);
         }
 
@@ -107,6 +107,11 @@ namespace cuSGA {
             const auto chunkIdx{sequenceIdx / PACKING_FACTOR};
             const auto bitOffset{(sequenceIdx % PACKING_FACTOR) * BIT_SIZE};
 
+            // Check if chunk needs to be cleared before writing
+            if ((sequenceIdx & (PACKING_FACTOR - 1)) == 0) {
+                bases[chunkIdx] = 0;
+            }
+
             // Pack into the pack_t
             bases[chunkIdx] |= (static_cast<sequencePack_t>(base) << bitOffset);
         }
@@ -179,10 +184,9 @@ namespace cuSGA {
         }
     }
 
-    __host__ bool PackedDNASequence::readFromFile(const ::std::string& fileName, ::std::ifstream* const file) const {
+    __host__ bool PackedDNASequence::readFromFile(const ::std::string& fileName, ::std::ifstream* const file) {
         // Read number of bases from file
-        sequenceSize_t numBases{0};
-        if (!(*file >> numBases)) {
+        if (!(*file >> this->numBases)) {
             // Check EOF
             if (file->eof()) {
                 return false;
@@ -209,11 +213,11 @@ namespace cuSGA {
 
             // Check if chunk needs to be cleared before writing
             if ((sequenceIdx & (PACKING_FACTOR - 1)) == 0) {
-                bases[chunkIdx] = 0;
+                this->bases[chunkIdx] = 0;
             }
 
             // Pack into the pack_t
-            bases[chunkIdx] |= (static_cast<sequencePack_t>(base) << bitOffset);
+            this->bases[chunkIdx] |= (static_cast<sequencePack_t>(base) << bitOffset);
         }
 
         // Update device instance

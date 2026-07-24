@@ -58,7 +58,7 @@ namespace cuSGA::KernelUtils {
     class BumpPtrAllocator {
     public:
         // Align size according to the given alignment
-        __host__ __device__ __forceinline__ static ::size_t align(const ::size_t ptr, const targetSize_t alignment) {
+        __host__ __device__ __forceinline__ static ::size_t align(const ::size_t ptr, const ::size_t alignment) {
             return (ptr + alignment - 1) & ~(alignment - 1);
         }
 

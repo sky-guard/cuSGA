@@ -95,7 +95,7 @@ namespace cuSGA {
         }
 
         // Read packed sequence from opened file
-        __host__ bool readFromFile(const ::std::string& fileName, ::std::ifstream* file) const;
+        __host__ bool readFromFile(const ::std::string& fileName, ::std::ifstream* file);
 
         // Shuffle object from the given lane, with the given mask
         __device__ __forceinline__ void shuffle_sync(const unsigned mask, const int srcLaneIdx) {

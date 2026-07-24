@@ -63,7 +63,7 @@ namespace cuSGA {
 
         // Grow allocator
         if (ownsInstance) {
-            allocator->emplaceReserve<SequenceGraph>();
+            allocator->grow<SequenceGraph>();
             growBuffers(allocator, numNodes, numEdges, maxSequenceLength, totalNumConnectedComponents, numScores);
         }
 
@@ -226,6 +226,14 @@ namespace cuSGA {
             throw ::std::runtime_error{::std::format("Unable to open file: {}", sequenceFileName)};
         }
 
+        // Read and skip number of scores and max sequence length
+        if (scoreSize_t numScores{0}; !(sequenceFile >> numScores)) {
+            throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", sequenceFileName)};
+        }
+        if (sequenceSize_t maxSequenceLength{0}; !(sequenceFile >> maxSequenceLength)) {
+            throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", sequenceFileName)};
+        }
+
         // Copy sequence graph instance to device
         copyToDevice();
 
@@ -340,7 +348,7 @@ namespace cuSGA {
         // Shared memory, partitioned in the following way to guarantee alignment without wasting any space:
         //      |  buffers (nodeSize_t)  |  isInQueue (bool)  |
         extern __shared__ nodeSize_t shared_buffers[];
-        const auto shared_isInQueue{shared_buffers + numWarpsPerBlock * SHARED_FRONTIER_BUFFER_SIZE};
+        const auto shared_isInQueue{shared_buffers + numWarpsPerBlock * (SHARED_FRONTIER_BUFFER_SIZE << 1)};
 
         // Get thread warp ID and check for thread overflow
         if (const auto warpID{(::blockIdx.x * ::blockDim.x + ::threadIdx.x) >> KernelUtils::WARP_SHIFT}; warpID < d_sequenceGraph.getNumConnectedComponents(sequenceBase)) {
