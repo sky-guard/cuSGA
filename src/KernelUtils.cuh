@@ -34,6 +34,10 @@ namespace cuSGA::KernelUtils {
             // Forward call
             int minGridSize{0};
             CUDA_CHECK(::cudaOccupancyMaxPotentialBlockSize(&minGridSize, &blockSize, Kernel, dynamicSMemSize, blockSizeLimit));
+
+            // Round down result to a multiple of WARP_SIZE
+            blockSize &= ~(WARP_SIZE - 1);
+            blockSize = (blockSize < WARP_SIZE) ? WARP_SIZE : blockSize;
         }
 
         return blockSize;
@@ -310,7 +314,7 @@ namespace cuSGA::KernelUtils {
         }
 
         // Initialize using device shared memory
-        __device__ __forceinline__ void initCudaSMem(const targetSize_t maxAlignment, const targetSize_t sharedMemSize, const ::uintptr_t sharedMemPtr) {
+        __device__ __forceinline__ void initCudaSMem(const targetSize_t sharedMemSize, const ::uintptr_t sharedMemPtr) {
             // Set size to the allocated shared memory size
             this->size = sharedMemSize;
 

@@ -6,7 +6,7 @@
 #include "KernelUtils.cuh"
 
 namespace cuSGA {
-    __host__ SequenceGraph::SequenceGraph(const ::std::string& pangenomeGraphFileName, const ::std::string& sequenceFileName, ::std::string const (& connectedComponentsFileNames)[NUM_BASES], bool ownsInstance, SequenceGraph* pinned_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) : SequenceGraph{PangenomeGraph{}, PackedDNASequence{}, {0}, {nullptr}, {nullptr}, {nullptr}, {0}, DoubleBuffer<cost_t>{}, 0, nullptr, ownsInstance, pinned_instanceOptional} {
+    __host__ SequenceGraph::SequenceGraph(const ::std::string& pangenomeGraphFileName, const ::std::string& sequenceFileName, ::std::string const (& connectedComponentsFileNames)[NUM_BASES], bool ownsInstance, SequenceGraph* __restrict__ pinned_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) : SequenceGraph{PangenomeGraph{}, PackedDNASequence{}, {0}, {nullptr}, {nullptr}, {nullptr}, {0}, DoubleBuffer<cost_t>{}, 0, nullptr, ownsInstance, pinned_instanceOptional} {
         // Get allocator
         KernelUtils::BumpPtrAllocator* allocator{allocatorOptional};
         KernelUtils::BumpPtrAllocator allocatorInstance{};
@@ -144,7 +144,7 @@ namespace cuSGA {
         sequenceFile.close();
     }
 
-    __host__ SequenceGraph SequenceGraph::copyToDevice(SequenceGraph* d_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) {
+    __host__ SequenceGraph SequenceGraph::copyToDevice(SequenceGraph* __restrict__ d_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) {
         // Check if device instance already exists for this sequence graph
         if (d_instance) {
             throw ::std::runtime_error{"Device instance already exists for this Sequence Graph!"};
@@ -252,7 +252,7 @@ namespace cuSGA {
         copyToDevice();
 
         // Allocate additional device buffers
-        nodeSize_t *d_buffers{nullptr};
+        nodeSize_t* d_buffers{nullptr};
         CUDA_CHECK(cudaMallocAsync(&d_buffers, DoubleBuffer<nodeSize_t>::NUM_DOUBLE_BUFFERS * pangenomeGraph.getNumNodes() * sizeof(nodeSize_t), cudaStreamDefault));
 
         // Loop over all sequences in the input file
@@ -358,7 +358,7 @@ namespace cuSGA {
         }
     }
 
-    __global__ void SequenceGraphKernels::insertionsAndPropagations(const SequenceGraph d_sequenceGraph, const DNABase sequenceBase, const targetSize_t numWarpsPerBlock, const connectedComponentSize_t maxConnectedComponentSize, nodeSize_t* const d_buffers) { // NOLINT
+    __global__ void SequenceGraphKernels::insertionsAndPropagations(const SequenceGraph d_sequenceGraph, const DNABase sequenceBase, const targetSize_t numWarpsPerBlock, const connectedComponentSize_t maxConnectedComponentSize, nodeSize_t* __restrict__ const d_buffers) { // NOLINT
         // Shared memory, partitioned in the following way to guarantee alignment without wasting any space:
         //      |  buffers (nodeSize_t)  |  isInQueue (bool)  |
         extern __shared__ nodeSize_t shared_buffers[];

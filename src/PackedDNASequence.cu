@@ -8,7 +8,7 @@
 #include "Utils.cuh"
 
 namespace cuSGA {
-    __host__ PackedDNASequence::PackedDNASequence(const ::std::string& fileName, const bool ownsInstance, PackedDNASequence* const pinned_instanceOptional, KernelUtils::BumpPtrAllocator* const allocatorOptional) : PackedDNASequence{} {
+    __host__ PackedDNASequence::PackedDNASequence(const ::std::string& fileName, const bool ownsInstance, PackedDNASequence* __restrict__ const pinned_instanceOptional, KernelUtils::BumpPtrAllocator* const allocatorOptional) : PackedDNASequence{} {
         // Get allocator
         KernelUtils::BumpPtrAllocator* allocator{allocatorOptional};
         KernelUtils::BumpPtrAllocator allocatorInstance{};
@@ -56,7 +56,7 @@ namespace cuSGA {
         file.close();
     }
 
-    __host__ PackedDNASequence::PackedDNASequence(const ::std::string& fileName, ::std::ifstream* const file, const bool ownsInstance, ::std::optional<sequenceSize_t> numBasesOptional, PackedDNASequence* const pinned_instanceOptional, KernelUtils::BumpPtrAllocator* const allocatorOptional) : PackedDNASequence{0, 0, nullptr, ownsInstance, pinned_instanceOptional} {
+    __host__ PackedDNASequence::PackedDNASequence(const ::std::string& fileName, ::std::ifstream* const file, const bool ownsInstance, ::std::optional<sequenceSize_t> numBasesOptional, PackedDNASequence* __restrict__ const pinned_instanceOptional, KernelUtils::BumpPtrAllocator* const allocatorOptional) : PackedDNASequence{0, 0, nullptr, ownsInstance, pinned_instanceOptional} {
         // Get allocator
         KernelUtils::BumpPtrAllocator* allocator{allocatorOptional};
         KernelUtils::BumpPtrAllocator allocatorInstance{};
@@ -117,7 +117,7 @@ namespace cuSGA {
         }
     }
 
-    __host__ PackedDNASequence PackedDNASequence::copyToDevice(PackedDNASequence* const d_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) {
+    __host__ PackedDNASequence PackedDNASequence::copyToDevice(PackedDNASequence* __restrict__ const d_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) {
         // Check if device instance already exists for this sequence
         if (d_instance) {
             throw ::std::runtime_error{"Device instance already exists for this Packed Sequence!"};

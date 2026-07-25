@@ -29,7 +29,7 @@ namespace cuSGA {
         DoubleBuffer() = default;
 
         // Parameterized constructor
-        __host__ DoubleBuffer(const targetSize_t size, const bool ownsInstance,  DoubleBuffer* const pinned_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* const allocatorOptional = nullptr) : DoubleBuffer{size, {nullptr}, 0, ownsInstance, pinned_instanceOptional} {
+        __host__ DoubleBuffer(const targetSize_t size, const bool ownsInstance,  DoubleBuffer* __restrict__ const pinned_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* const allocatorOptional = nullptr) : DoubleBuffer{size, {nullptr}, 0, ownsInstance, pinned_instanceOptional} {
             // Get allocator
             KernelUtils::BumpPtrAllocator* allocator{allocatorOptional};
             KernelUtils::BumpPtrAllocator allocatorInstance{};
@@ -60,10 +60,10 @@ namespace cuSGA {
         }
 
         // Parameterized constructor
-        __host__ __device__ __forceinline__ DoubleBuffer(const targetSize_t size, T* const current, T* const alternate, const selector_t selector, const bool ownsInstance, DoubleBuffer* const pinned_instance = nullptr, DoubleBuffer* const d_instance = nullptr) : size{size}, buffers{current, alternate}, selector{selector}, ownsInstance{ownsInstance}, pinned_instance{pinned_instance}, d_instance{d_instance} {}
+        __host__ __device__ __forceinline__ DoubleBuffer(const targetSize_t size, T* __restrict__ const current, T* __restrict__ const alternate, const selector_t selector, const bool ownsInstance, DoubleBuffer* __restrict__ const pinned_instance = nullptr, DoubleBuffer* __restrict__ const d_instance = nullptr) : size{size}, buffers{current, alternate}, selector{selector}, ownsInstance{ownsInstance}, pinned_instance{pinned_instance}, d_instance{d_instance} {}
 
         // Parameterized constructor
-        __host__ __device__ __forceinline__ DoubleBuffer(const targetSize_t size, T* const (& buffers)[NUM_DOUBLE_BUFFERS], const selector_t selector, const bool ownsInstance, DoubleBuffer* const pinned_instance = nullptr, DoubleBuffer* const d_instance = nullptr) : size{size}, selector{selector}, ownsInstance{ownsInstance}, pinned_instance{pinned_instance}, d_instance{d_instance} {
+        __host__ __device__ __forceinline__ DoubleBuffer(const targetSize_t size, T* __restrict__ const (& buffers)[NUM_DOUBLE_BUFFERS], const selector_t selector, const bool ownsInstance, DoubleBuffer* __restrict__ const pinned_instance = nullptr, DoubleBuffer* __restrict__ const d_instance = nullptr) : size{size}, selector{selector}, ownsInstance{ownsInstance}, pinned_instance{pinned_instance}, d_instance{d_instance} {
             // Set buffers
 #pragma unroll
             for (doubleBufferSize_t bufferIdx{0}; bufferIdx < NUM_DOUBLE_BUFFERS; ++bufferIdx) {
@@ -87,7 +87,7 @@ namespace cuSGA {
         ~DoubleBuffer() = default;
 
         // Move double buffer to device
-        __host__ DoubleBuffer copyToDevice(DoubleBuffer* const d_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* const allocatorOptional = nullptr) {
+        __host__ DoubleBuffer copyToDevice(DoubleBuffer* __restrict__ const d_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* const allocatorOptional = nullptr) {
             // Check if device instance already exists for this double buffer
             if (d_instance) {
                 throw ::std::runtime_error{"Device instance already exists for this Double Buffer!"};
@@ -161,43 +161,33 @@ namespace cuSGA {
         }
 
         // Get current buffer
-        __host__ __device__ __forceinline__ T* current() const {
+        __host__ __device__ __forceinline__ T* __restrict__ current() const {
             return buffers[selector];
         }
 
         // Get alternate buffer
-        __host__ __device__ __forceinline__ T* alternate() const {
+        __host__ __device__ __forceinline__ T* __restrict__ alternate() const {
             return buffers[selector ^ 1];
         }
 
         // Get pinned instance
-        __host__ __device__ __forceinline__ DoubleBuffer* getPinnedInstance() const {
+        __host__ __device__ __forceinline__ DoubleBuffer* __restrict__ getPinnedInstance() const {
             return pinned_instance;
         }
 
         // Get device instance
-        __host__ __device__ __forceinline__ DoubleBuffer* getDeviceInstance() const {
+        __host__ __device__ __forceinline__ DoubleBuffer* __restrict__ getDeviceInstance() const {
             return d_instance;
         }
 
         // Get buffer root
-        __host__ __device__ __forceinline__ void* getBuffersRoot() const {
+        __host__ __device__ __forceinline__ void* __restrict__ getBuffersRoot() const {
             return buffers[0];
         }
 
         // Swap buffers
         __host__ __device__ __forceinline__ void swap() {
             this->selector ^= 1;
-        }
-
-        // Non-const version of subscription operator for assignment and modification
-        __host__ __device__ __forceinline__ T& operator[](const targetSize_t idx) {
-            return buffers[selector][idx];
-        }
-
-        // Const version of subscription operator for read-only access
-        __host__ __device__ __forceinline__ const T& operator[](const targetSize_t idx) const {
-            return buffers[selector][idx];
         }
 
         // Shuffle object from the given lane, with the given mask
@@ -217,11 +207,11 @@ namespace cuSGA {
         // Double buffer implementation
         // NOTE: Uses pinned memory and linearized memory layout on the device memory
         targetSize_t size{0};
-        T* buffers[NUM_DOUBLE_BUFFERS]{nullptr};
+        T* __restrict__ buffers[NUM_DOUBLE_BUFFERS]{nullptr};
         selector_t selector{0};
         bool ownsInstance{false};
-        DoubleBuffer* pinned_instance{nullptr};
-        DoubleBuffer* d_instance{nullptr};
+        DoubleBuffer* __restrict__ pinned_instance{nullptr};
+        DoubleBuffer* __restrict__ d_instance{nullptr};
     };
 } // cuSGA
 

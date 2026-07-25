@@ -31,8 +31,8 @@ namespace cuSGA {
 
         // Insertions and propagations kernel
         inline constexpr targetSize_t SHARED_FRONTIER_BUFFER_SIZE{KernelUtils::WARP_SIZE};
-        __device__ __forceinline__ void processNeighbor(const SequenceGraph& d_sequenceGraph, Frontier* warpFrontier, Frontier* shared_frontier, DNABase sequenceBase, nodeSize_t neighborIdx, cost_t updatedCurrentLayerNeighborCost, ::uint8_t laneIdx);
-        __global__ void insertionsAndPropagations(SequenceGraph d_sequenceGraph, DNABase sequenceBase, targetSize_t numWarpsPerBlock, connectedComponentSize_t maxConnectedComponentSize, nodeSize_t* d_buffers);
+        __device__ __forceinline__ void processNeighbor(const SequenceGraph& __restrict__ d_sequenceGraph, Frontier* __restrict__ warpFrontier, Frontier* __restrict__ shared_frontier, DNABase sequenceBase, nodeSize_t neighborIdx, cost_t updatedCurrentLayerNeighborCost, ::uint8_t laneIdx);
+        __global__ void insertionsAndPropagations(SequenceGraph d_sequenceGraph, DNABase sequenceBase, targetSize_t numWarpsPerBlock, connectedComponentSize_t maxConnectedComponentSize, nodeSize_t* __restrict__ d_buffers);
 
         // Minimum cost kernel
         __global__ void minCost(SequenceGraph d_sequenceGraph, scoreSize_t scoreIdx);
@@ -97,10 +97,10 @@ namespace cuSGA {
         // Default constructor
         SequenceGraph() = default;
         // Parameterized constructor
-        __host__ SequenceGraph(const ::std::string& pangenomeGraphFileName, const ::std::string& sequenceFileName, ::std::string const (& connectedComponentsFileNames)[NUM_BASES], bool ownsInstance, SequenceGraph* pinned_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
+        __host__ SequenceGraph(const ::std::string& pangenomeGraphFileName, const ::std::string& sequenceFileName, ::std::string const (& connectedComponentsFileNames)[NUM_BASES], bool ownsInstance, SequenceGraph* __restrict__ pinned_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
 
         // Sequence graph constructor
-        __host__ __device__ __forceinline__ SequenceGraph(const PangenomeGraph& pangenomeGraph, const PackedDNASequence& sequence, connectedComponentSize_t const (& numConnectedComponents)[NUM_BASES], nodeSize_t* const (& connectedComponentsOffsets)[NUM_BASES], nodeSize_t* const (& connectedComponentsMappings)[NUM_BASES], connectedComponentSize_t* const (& connectedComponentsLocalIndexMappings)[NUM_BASES], connectedComponentSize_t const (& maxConnectedComponentsSizes)[NUM_BASES], const DoubleBuffer<cost_t>& costsDoubleBuffer, const scoreSize_t numScores, cost_t* const scores, const bool ownsInstance, SequenceGraph* const pinned_instance = nullptr, SequenceGraph* const d_instance = nullptr) : pangenomeGraph{pangenomeGraph}, sequence{sequence}, costsDoubleBuffer{costsDoubleBuffer}, numScores{numScores}, scores{scores}, ownsInstance{ownsInstance}, pinned_instance{pinned_instance}, d_instance{d_instance} {
+        __host__ __device__ __forceinline__ SequenceGraph(const PangenomeGraph& __restrict__ pangenomeGraph, const PackedDNASequence& __restrict__ sequence, connectedComponentSize_t const (& numConnectedComponents)[NUM_BASES], nodeSize_t* __restrict__ const (& connectedComponentsOffsets)[NUM_BASES], nodeSize_t* __restrict__ const (& connectedComponentsMappings)[NUM_BASES], connectedComponentSize_t* __restrict__ const (& connectedComponentsLocalIndexMappings)[NUM_BASES], connectedComponentSize_t const (& maxConnectedComponentsSizes)[NUM_BASES], const DoubleBuffer<cost_t>& __restrict__ costsDoubleBuffer, const scoreSize_t numScores, cost_t* __restrict__ const scores, const bool ownsInstance, SequenceGraph* __restrict__ const pinned_instance = nullptr, SequenceGraph* __restrict__ const d_instance = nullptr) : pangenomeGraph{pangenomeGraph}, sequence{sequence}, costsDoubleBuffer{costsDoubleBuffer}, numScores{numScores}, scores{scores}, ownsInstance{ownsInstance}, pinned_instance{pinned_instance}, d_instance{d_instance} {
 #pragma unroll
             for (DNABase_t baseIdx{0}; baseIdx < NUM_BASES; ++baseIdx) {
                 // Set number of connected components
@@ -132,17 +132,17 @@ namespace cuSGA {
         ~SequenceGraph() = default;
 
         // Move sequence graph to device
-        __host__ SequenceGraph copyToDevice(SequenceGraph* d_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
+        __host__ SequenceGraph copyToDevice(SequenceGraph* __restrict__ d_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
         // Free sequence graph
         __host__ void free() const;
 
         // Get pangenome graph
-        __host__ __device__ __forceinline__ const PangenomeGraph& getPangenomeGraph() const {
+        __host__ __device__ __forceinline__ const PangenomeGraph& __restrict__ getPangenomeGraph() const {
             return pangenomeGraph;
         }
 
         // Get sequence
-        __host__ __device__ __forceinline__ const PackedDNASequence& getSequence() const {
+        __host__ __device__ __forceinline__ const PackedDNASequence& __restrict__ getSequence() const {
             return sequence;
         }
 
@@ -172,7 +172,7 @@ namespace cuSGA {
         }
 
         // Get costs double buffer
-        __host__ __device__ __forceinline__ const DoubleBuffer<cost_t>& getCostsDoubleBuffer() const {
+        __host__ __device__ __forceinline__ const DoubleBuffer<cost_t>& __restrict__ getCostsDoubleBuffer() const {
             return costsDoubleBuffer;
         }
 
@@ -182,12 +182,12 @@ namespace cuSGA {
         }
 
         // Get scores
-        __host__ __device__ __forceinline__ cost_t* getScores() const {
+        __host__ __device__ __forceinline__ cost_t* __restrict__ getScores() const {
             return scores;
         }
 
         // Copy back scores from device
-        __host__ __forceinline__ cost_t* h2d_getScores() const {
+        __host__ __forceinline__ cost_t* __restrict__ h2d_getScores() const {
             if (d_instance) {
                 CUDA_CHECK(::cudaMemcpy(scores, pinned_instance->scores, numScores * sizeof(scores[0]),::cudaMemcpyDeviceToHost));
             }
@@ -196,23 +196,18 @@ namespace cuSGA {
         }
 
         // Get pinned instance
-        __host__ __device__ __forceinline__ SequenceGraph* getPinnedInstance() const {
+        __host__ __device__ __forceinline__ SequenceGraph* __restrict__ getPinnedInstance() const {
             return pinned_instance;
         }
 
         // Get device instance
-        __host__ __device__ __forceinline__ SequenceGraph* getDeviceInstance() const {
+        __host__ __device__ __forceinline__ SequenceGraph* __restrict__ getDeviceInstance() const {
             return d_instance;
         }
 
         // Get buffer root
-        __host__ __device__ __forceinline__ void* getBuffersRoot() const {
+        __host__ __device__ __forceinline__ void* __restrict__ getBuffersRoot() const {
             return pangenomeGraph.getBuffersRoot();
-        }
-
-        // Reset scores
-        __host__ __device__ __forceinline__ void initializeScores() const {
-            ::memset(scores, -1, numScores * sizeof(scores[0]));
         }
 
         // Shuffle object from the given lane, with the given mask
@@ -359,20 +354,20 @@ namespace cuSGA {
         PangenomeGraph pangenomeGraph{};
         PackedDNASequence sequence{};
         connectedComponentSize_t numConnectedComponents[NUM_BASES]{};
-        nodeSize_t* connectedComponentsOffsets[NUM_BASES]{nullptr};
-        nodeSize_t* connectedComponentsMappings[NUM_BASES]{nullptr};
-        connectedComponentSize_t* connectedComponentsLocalIndexMappings[NUM_BASES]{nullptr};
+        nodeSize_t* __restrict__ connectedComponentsOffsets[NUM_BASES]{nullptr};
+        nodeSize_t* __restrict__ connectedComponentsMappings[NUM_BASES]{nullptr};
+        connectedComponentSize_t* __restrict__ connectedComponentsLocalIndexMappings[NUM_BASES]{nullptr};
         connectedComponentSize_t maxConnectedComponentsSizes[NUM_BASES]{};
         DoubleBuffer<cost_t> costsDoubleBuffer{};
         scoreSize_t numScores{0};
-        cost_t* scores{nullptr};
+        cost_t* __restrict__ scores{nullptr};
         bool ownsInstance{false};
-        SequenceGraph* pinned_instance{nullptr};
-        SequenceGraph* d_instance{nullptr};
+        SequenceGraph* __restrict__ pinned_instance{nullptr};
+        SequenceGraph* __restrict__ d_instance{nullptr};
     };
 
     // Insertions and propagations helper function
-    __device__ __forceinline__ void SequenceGraphKernels::processNeighbor(const SequenceGraph& d_sequenceGraph, Frontier* const warpFrontier, Frontier* const shared_frontier, DNABase sequenceBase, const nodeSize_t neighborIdx, const cost_t updatedCurrentLayerNeighborCost, const ::uint8_t laneIdx) {
+    __device__ __forceinline__ void SequenceGraphKernels::processNeighbor(const SequenceGraph& __restrict__ d_sequenceGraph, Frontier* __restrict__ const warpFrontier, Frontier* __restrict__ const shared_frontier, DNABase sequenceBase, const nodeSize_t neighborIdx, const cost_t updatedCurrentLayerNeighborCost, const ::uint8_t laneIdx) {
         // Set cost to atomic min and get previous current layer neighbor cost
         // NOTE: Because in-degree for a node should be low, we can avoid doing warp / block level reduction in order to reduce overhead
         const auto previousCurrentLayerNeighborCost{::atomicMin(&d_sequenceGraph.getCostsDoubleBuffer().current()[neighborIdx], updatedCurrentLayerNeighborCost)};

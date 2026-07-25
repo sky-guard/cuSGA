@@ -6,7 +6,7 @@
 #include "KernelUtils.cuh"
 
 namespace cuSGA {
-    __host__ PangenomeGraph::PangenomeGraph(const ::std::string& fileName, bool ownsInstance, PangenomeGraph* pinned_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) : PangenomeGraph{0, PackedDNASequence{}, nullptr, nullptr, ownsInstance, pinned_instanceOptional} {
+    __host__ PangenomeGraph::PangenomeGraph(const ::std::string& fileName, bool ownsInstance, PangenomeGraph* __restrict__ pinned_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) : PangenomeGraph{0, PackedDNASequence{}, nullptr, nullptr, ownsInstance, pinned_instanceOptional} {
         // Get allocator
         KernelUtils::BumpPtrAllocator* allocator{allocatorOptional};
         KernelUtils::BumpPtrAllocator allocatorInstance{};
@@ -67,7 +67,7 @@ namespace cuSGA {
         file.close();
     }
 
-    __host__ PangenomeGraph::PangenomeGraph(const ::std::string& fileName, ::std::ifstream* file, const bool ownsInstance, ::std::optional<nodeSize_t> numNodesOptional, ::std::optional<edgeSize_t> numEdgesOptional, PangenomeGraph* pinned_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) : PangenomeGraph{0, PackedDNASequence{}, nullptr, nullptr, ownsInstance, pinned_instanceOptional} {
+    __host__ PangenomeGraph::PangenomeGraph(const ::std::string& fileName, ::std::ifstream* file, const bool ownsInstance, ::std::optional<nodeSize_t> numNodesOptional, ::std::optional<edgeSize_t> numEdgesOptional, PangenomeGraph* __restrict__ pinned_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) : PangenomeGraph{0, PackedDNASequence{}, nullptr, nullptr, ownsInstance, pinned_instanceOptional} {
         // Get allocator
         KernelUtils::BumpPtrAllocator* allocator{allocatorOptional};
         KernelUtils::BumpPtrAllocator allocatorInstance{};
@@ -128,7 +128,7 @@ namespace cuSGA {
         }
     }
 
-    __host__ PangenomeGraph PangenomeGraph::copyToDevice(PangenomeGraph* d_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) {
+    __host__ PangenomeGraph PangenomeGraph::copyToDevice(PangenomeGraph* __restrict__ d_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) {
         // Check if device instance already exists for this pangenome graph
         if (d_instance) {
             throw ::std::runtime_error{"Device instance already exists for this Pangenome Graph!"};

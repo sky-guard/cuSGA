@@ -29,10 +29,10 @@ namespace cuSGA {
         // Default constructor
         Frontier() = default;
         // Parameterized constructor
-        __host__ Frontier(nodeSize_t size, bool ownsInstance, Frontier* pinned_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
+        __host__ Frontier(nodeSize_t size, bool ownsInstance, Frontier* __restrict__ pinned_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
 
         // Parameterized constructor
-        __host__ __device__ __forceinline__ Frontier(const nodeSize_t currentSize, const nodeSize_t alternateSize, const DoubleBuffer<nodeSize_t>& doubleBuffer, queuePack_t* const isInQueue, const bool ownsInstance, Frontier* const pinned_instance = nullptr, Frontier* const d_instance = nullptr) : currentSize{currentSize}, alternateSize{alternateSize}, doubleBuffer{doubleBuffer}, isInQueue{isInQueue}, ownsInstance{ownsInstance}, pinned_instance{pinned_instance}, d_instance{d_instance} {}
+        __host__ __device__ __forceinline__ Frontier(const nodeSize_t currentSize, const nodeSize_t alternateSize, const DoubleBuffer<nodeSize_t>& __restrict__ doubleBuffer, queuePack_t* const isInQueue, const bool ownsInstance, Frontier* __restrict__ const pinned_instance = nullptr, Frontier* __restrict__ const d_instance = nullptr) : currentSize{currentSize}, alternateSize{alternateSize}, doubleBuffer{doubleBuffer}, isInQueue{isInQueue}, ownsInstance{ownsInstance}, pinned_instance{pinned_instance}, d_instance{d_instance} {}
 
         // Copy constructor
         Frontier(const Frontier& other) = default;
@@ -46,7 +46,7 @@ namespace cuSGA {
         ~Frontier() = default;
 
         // Move frontier to device
-        __host__ Frontier copyToDevice(Frontier* d_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
+        __host__ Frontier copyToDevice(Frontier* __restrict__ d_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
         // Free frontier
         __host__ void free() const;
 
@@ -81,17 +81,17 @@ namespace cuSGA {
         }
 
         // Get pinned instance
-        __host__ __device__ __forceinline__ Frontier* getPinnedInstance() const {
+        __host__ __device__ __forceinline__ Frontier* __restrict__ getPinnedInstance() const {
             return pinned_instance;
         }
 
         // Get device instance
-        __host__ __device__ __forceinline__ Frontier* getDeviceInstance() const {
+        __host__ __device__ __forceinline__ Frontier* __restrict__ getDeviceInstance() const {
             return d_instance;
         }
 
         // Get buffers root
-        __host__ __device__ __forceinline__ void* getBuffersRoot() const {
+        __host__ __device__ __forceinline__ void* __restrict__ getBuffersRoot() const {
             return doubleBuffer.getBuffersRoot();
         }
 
@@ -174,8 +174,8 @@ namespace cuSGA {
         DoubleBuffer<nodeSize_t> doubleBuffer{};
         queuePack_t* isInQueue{nullptr};
         bool ownsInstance{false};
-        Frontier* pinned_instance{nullptr};
-        Frontier* d_instance{nullptr};
+        Frontier* __restrict__ pinned_instance{nullptr};
+        Frontier* __restrict__ d_instance{nullptr};
     };
 } // cuSGA
 

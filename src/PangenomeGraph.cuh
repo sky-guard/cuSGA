@@ -30,12 +30,12 @@ namespace cuSGA {
         // Default constructor
         PangenomeGraph() = default;
         // Parameterized constructor
-        __host__ PangenomeGraph(const ::std::string& fileName, bool ownsInstance, PangenomeGraph* pinned_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
+        __host__ PangenomeGraph(const ::std::string& fileName, bool ownsInstance, PangenomeGraph* __restrict__ pinned_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
         // Parameterized constructor
-        __host__ PangenomeGraph(const ::std::string& fileName, ::std::ifstream* file, bool ownsInstance, ::std::optional<nodeSize_t> numNodesOptional = ::std::nullopt, ::std::optional<edgeSize_t> numEdgesOptional = ::std::nullopt, PangenomeGraph* pinned_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
+        __host__ PangenomeGraph(const ::std::string& fileName, ::std::ifstream* file, bool ownsInstance, ::std::optional<nodeSize_t> numNodesOptional = ::std::nullopt, ::std::optional<edgeSize_t> numEdgesOptional = ::std::nullopt, PangenomeGraph* __restrict__ pinned_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
 
         // Pangenome graph constructor
-        __host__ __device__ __forceinline__ PangenomeGraph(const edgeSize_t numEdges, const PackedDNASequence& baseValues, nodeSize_t* const columnValues, edgeSize_t* const rowOffsets, const bool ownsInstance, PangenomeGraph* const pinned_instance = nullptr, PangenomeGraph* const d_instance = nullptr) : numEdges{numEdges}, baseValues{baseValues}, columnValues{columnValues}, rowOffsets{rowOffsets}, ownsInstance{ownsInstance}, pinned_instance{pinned_instance}, d_instance{d_instance} {}
+        __host__ __device__ __forceinline__ PangenomeGraph(const edgeSize_t numEdges, const PackedDNASequence& __restrict__ baseValues, nodeSize_t* __restrict__ const columnValues, edgeSize_t* __restrict__ const rowOffsets, const bool ownsInstance, PangenomeGraph* __restrict__ const pinned_instance = nullptr, PangenomeGraph* __restrict__ const d_instance = nullptr) : numEdges{numEdges}, baseValues{baseValues}, columnValues{columnValues}, rowOffsets{rowOffsets}, ownsInstance{ownsInstance}, pinned_instance{pinned_instance}, d_instance{d_instance} {}
 
         // Copy constructor
         PangenomeGraph(const PangenomeGraph& other) = default;
@@ -49,7 +49,7 @@ namespace cuSGA {
         ~PangenomeGraph() = default;
 
         // Move pangenome graph to device
-        __host__ PangenomeGraph copyToDevice(PangenomeGraph* d_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
+        __host__ PangenomeGraph copyToDevice(PangenomeGraph* __restrict__ d_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
         // Free pangenome graph
         __host__ void free() const;
 
@@ -64,7 +64,7 @@ namespace cuSGA {
         }
 
         // Get DNA base values for the graph
-        __host__ __device__ __forceinline__ const PackedDNASequence& getBaseValues() const {
+        __host__ __device__ __forceinline__ const PackedDNASequence& __restrict__ getBaseValues() const {
             return baseValues;
         }
 
@@ -90,17 +90,17 @@ namespace cuSGA {
         }
 
         // Get pinned instance
-        __host__ __device__ __forceinline__ PangenomeGraph* getPinnedInstance() const {
+        __host__ __device__ __forceinline__ PangenomeGraph* __restrict__ getPinnedInstance() const {
             return pinned_instance;
         }
 
         // Get device instance
-        __host__ __device__ __forceinline__ PangenomeGraph* getDeviceInstance() const {
+        __host__ __device__ __forceinline__ PangenomeGraph* __restrict__ getDeviceInstance() const {
             return d_instance;
         }
 
         // Get buffer root
-        __host__ __device__ __forceinline__ void* getBuffersRoot() const {
+        __host__ __device__ __forceinline__ void* __restrict__ getBuffersRoot() const {
             return baseValues.getBuffersRoot();
         }
 
@@ -120,11 +120,11 @@ namespace cuSGA {
         // NOTE: Uses pinned memory and linearized memory layout on the device memory
         edgeSize_t numEdges{0};
         PackedDNASequence baseValues{};
-        nodeSize_t* columnValues{nullptr};
-        edgeSize_t* rowOffsets{nullptr};
+        nodeSize_t* __restrict__ columnValues{nullptr};
+        edgeSize_t* __restrict__ rowOffsets{nullptr};
         bool ownsInstance{false};
-        PangenomeGraph* pinned_instance{nullptr};
-        PangenomeGraph* d_instance{nullptr};
+        PangenomeGraph* __restrict__ pinned_instance{nullptr};
+        PangenomeGraph* __restrict__ d_instance{nullptr};
     };
 } // cuSGA
 

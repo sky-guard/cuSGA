@@ -3,7 +3,7 @@
 #include <stdexcept>
 
 namespace cuSGA {
-    __host__ Frontier::Frontier(const targetSize_t size, const bool ownsInstance, Frontier* const pinned_instanceOptional, KernelUtils::BumpPtrAllocator* const allocatorOptional) : Frontier{0, 0, DoubleBuffer<nodeSize_t>{}, nullptr, ownsInstance, pinned_instanceOptional} {
+    __host__ Frontier::Frontier(const targetSize_t size, const bool ownsInstance, Frontier* __restrict__ const pinned_instanceOptional, KernelUtils::BumpPtrAllocator* const allocatorOptional) : Frontier{0, 0, DoubleBuffer<nodeSize_t>{}, nullptr, ownsInstance, pinned_instanceOptional} {
         // Get allocator
         KernelUtils::BumpPtrAllocator* allocator{allocatorOptional};
         KernelUtils::BumpPtrAllocator allocatorInstance{};
@@ -31,7 +31,7 @@ namespace cuSGA {
         this->isInQueue = allocator->emplaceSet<::std::remove_reference_t<decltype(isInQueue[0])>>(0, numChunks);
     }
 
-    __host__ Frontier Frontier::copyToDevice(Frontier* const d_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) {
+    __host__ Frontier Frontier::copyToDevice(Frontier* __restrict__ const d_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) {
         // Check if device instance already exists for this frontier
         if (d_instance) {
             throw ::std::runtime_error{"Device instance already exists for this Frontier!"};
