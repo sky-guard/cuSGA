@@ -94,7 +94,7 @@ namespace cuSGA {
 
             // Read connected components offsets from file
             const auto connectedComponentsOffsets{connectedComponentsOffsetsBase + connectedComponentsCounter};
-            for (connectedComponentSize_t connectedComponentIdx{0}; connectedComponentIdx < numConnectedComponentsValue + 1; ++connectedComponentIdx) {
+            for (connectedComponentSize_t connectedComponentIdx{0}; connectedComponentIdx <= numConnectedComponentsValue; ++connectedComponentIdx) {
                 if (!(connectedComponentsFile >> connectedComponentsOffsets[connectedComponentIdx])) {
                     throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", connectedComponentsFileNames[baseIdx])};
                 }
