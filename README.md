@@ -91,14 +91,14 @@ cd build
 
 To align a sequence and print the resulting Alignment Scores, please run the following command:
 ```bash
-cuSGA -s SEQUENCE_FILE -p PANGENOME_GRAPH_FILE -c CONNECTED_COMPONENTS_FILE_PREFIX
+./cuSGA -s SEQUENCE_FILE -p PANGENOME_GRAPH_FILE -c CONNECTED_COMPONENTS_FILE_PREFIX
 ```
 
 ***NOTE**: For additional information regarding the expected files and their formats, please read [Input File Formats](#input-file-formats).*
 
 For additional information, please run:
 ```bash
-cuSGA --help
+./cuSGA --help
 ```
 
 ---
@@ -153,8 +153,8 @@ The following results were obtained testing the alignment of 100 Sequences, each
 
 | Implementation | Platform                            | Execution Time | Speedup         | Time Reduction |
 |:---------------|:------------------------------------|:---------------|:----------------|:---------------|
-| **ParSGA**     | OpenMP (8 cores)                    | 98s            | 1.0x            | 0%             |
-| **cuSGA**      | NVIDIA GPU (NVIDIA RTX 3080 Mobile) | **63s - 14s**  | **1.6x - 7.0x** | **36% - 86%**  |
+| **ParSGA**     | OpenMP (Ryzen 9 6900HS, 8 cores)    | 98s            | 1.0x            | 0%             |
+| **cuSGA**      | CUDA (NVIDIA RTX 3080 Mobile)       | **63s - 14s**  | **1.6x - 7.0x** | **36% - 86%**  |
 
 **These results should however be taken with a grain of salt and are not entirely reflective of what the current implementation could be able to achieve!** 
 
