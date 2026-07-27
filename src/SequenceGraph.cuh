@@ -21,21 +21,22 @@ namespace cuSGA {
     // Sequence graph kernels
     namespace SequenceGraphKernels {
         // Initialization kernel
-        __global__ void initialize(SequenceGraph d_sequenceGraph, DNABase initialSequenceBase);
+        __global__ void initialize(const sequencePack_t* __restrict__ d_baseValues, cost_t* __restrict__ d_currentCosts, nodeSize_t numNodes, DNABase initialSequenceBase);
 
         // Substitutions kernel
-        __global__ void substitutions(SequenceGraph d_sequenceGraph, DNABase sequenceBase);
+        __global__ void substitutions(const edgeSize_t* __restrict__ d_neighborOffsets, const nodeSize_t* __restrict__ d_neighborValues, const sequencePack_t* __restrict__ d_baseValues, const cost_t* __restrict__ d_previousCosts, cost_t* __restrict__ d_currentCosts, nodeSize_t numNodes, DNABase sequenceBase);
 
         // Deletions kernel
-        __global__ void deletions(SequenceGraph d_sequenceGraph);
+        __global__ void deletions(const cost_t* __restrict__ d_previousCosts, cost_t* __restrict__ d_currentCosts, nodeSize_t numNodes);
 
         // Insertions and propagations kernel
-        inline constexpr targetSize_t SHARED_FRONTIER_BUFFER_SIZE{KernelUtils::WARP_SIZE};
-        __device__ __forceinline__ void processNeighbor(const SequenceGraph& __restrict__ d_sequenceGraph, Frontier* __restrict__ warpFrontier, Frontier* __restrict__ shared_frontier, DNABase sequenceBase, nodeSize_t neighborIdx, cost_t updatedCurrentLayerNeighborCost, ::uint8_t laneIdx);
-        __global__ void insertionsAndPropagations(SequenceGraph d_sequenceGraph, DNABase sequenceBase, targetSize_t numWarpsPerBlock, connectedComponentSize_t maxConnectedComponentSize, nodeSize_t* __restrict__ d_buffers);
+        inline constexpr targetSize_t SHARED_FRONTIER_BUFFER_SIZE{KernelUtils::WARP_SIZE << 1};
+        __device__ __forceinline__ void processNeighbor(Frontier* __restrict__ warpFrontier, Frontier* __restrict__ shared_frontier, cost_t* __restrict__ d_currentCosts, DNABase sequenceBase, nodeSize_t neighborIdx, nodeSize_t neighborLocalIdx, cost_t updatedCurrentLayerNeighborCost, ::uint8_t laneIdx);
+        __device__ __forceinline__ void processNode(nodeSize_t nodeIdx, Frontier* __restrict__ warpFrontier, Frontier* __restrict__ shared_frontier, const edgeSize_t* __restrict__ d_neighborOffsets, const nodeSize_t* __restrict__ d_neighborValues, const connectedComponentSize_t* __restrict__ d_connectedComponentLocalIndexMappings, cost_t* __restrict__ d_currentCosts, DNABase sequenceBase, uint8_t laneIdx);
+        __global__ void insertionsAndPropagations(const edgeSize_t* __restrict__ d_neighborOffsets, const nodeSize_t* __restrict__ d_neighborValues, const nodeSize_t* __restrict__ d_connectedComponentOffsets, const nodeSize_t* __restrict__ d_connectedComponentMappings, const connectedComponentSize_t* __restrict__ d_connectedComponentLocalIndexMappings, cost_t* __restrict__ d_currentCosts, nodeSize_t* __restrict__ d_buffers, DNABase sequenceBase, targetSize_t numWarpsPerBlock, connectedComponentSize_t numConnectedComponents, connectedComponentSize_t maxConnectedComponentSize);
 
         // Minimum cost kernel
-        __global__ void minCost(SequenceGraph d_sequenceGraph, scoreSize_t scoreIdx);
+        __global__ void minCost(const cost_t* __restrict__ d_currentCosts, cost_t* __restrict__ d_scores, nodeSize_t numNodes, scoreSize_t scoreIdx);
     } // SequenceGraphKernels
 
     // Sequence graph
@@ -243,7 +244,7 @@ namespace cuSGA {
 
             // Launch kernel
             const auto initialSequenceBase{sequence[0]};
-            KernelUtils::cudaLaunchKernel<SequenceGraphKernels::initialize>(gridSize, blockSize, 0, cudaStreamDefault, *pinned_instance, initialSequenceBase);
+            KernelUtils::cudaLaunchKernel<SequenceGraphKernels::initialize>(gridSize, blockSize, 0, cudaStreamDefault, pinned_instance->pangenomeGraph.getBaseValues().getBases(), pinned_instance->costsDoubleBuffer.current(), pinned_instance->pangenomeGraph.getNumNodes(), initialSequenceBase);
         }
 
         // Launch substitutions kernel
@@ -256,7 +257,7 @@ namespace cuSGA {
 
             // Launch kernel
             const auto sequenceBase{sequence[layerIdx]};
-            KernelUtils::cudaLaunchKernel<SequenceGraphKernels::substitutions>(gridSize, blockSize, 0, cudaStreamDefault, *pinned_instance, sequenceBase);
+            KernelUtils::cudaLaunchKernel<SequenceGraphKernels::substitutions>(gridSize, blockSize, 0, cudaStreamDefault, pinned_instance->pangenomeGraph.getNeighborOffsets(), pinned_instance->pangenomeGraph.getNeighborValues(), pinned_instance->pangenomeGraph.getBaseValues().getBases(), pinned_instance->costsDoubleBuffer.alternate(), pinned_instance->costsDoubleBuffer.current(), pinned_instance->pangenomeGraph.getNumNodes(), sequenceBase);
         }
 
         // Launch deletions kernel
@@ -268,7 +269,7 @@ namespace cuSGA {
             const auto gridSize{KernelUtils::cudaSizeGrid(pangenomeGraph.getNumNodes(), blockSize)};
 
             // Launch kernel
-            KernelUtils::cudaLaunchKernel<SequenceGraphKernels::deletions>(gridSize, blockSize, 0, cudaStreamDefault, *pinned_instance);
+            KernelUtils::cudaLaunchKernel<SequenceGraphKernels::deletions>(gridSize, blockSize, 0, cudaStreamDefault, pinned_instance->costsDoubleBuffer.alternate(), pinned_instance->costsDoubleBuffer.current(), pinned_instance->pangenomeGraph.getNumNodes());
         }
 
         // Launch insertions and propagations kernel
@@ -309,7 +310,7 @@ namespace cuSGA {
 
             // Launch kernel
             const auto maxConnectedComponentSize{maxConnectedComponentsSizes[static_cast<DNABase_t>(sequenceBase)]};
-            KernelUtils::cudaLaunchKernel<SequenceGraphKernels::insertionsAndPropagations>(gridSize, blockSize, dynamicSMemSize, cudaStreamDefault, *pinned_instance, sequenceBase, numWarpsPerBlock, maxConnectedComponentSize, d_buffers);
+            KernelUtils::cudaLaunchKernel<SequenceGraphKernels::insertionsAndPropagations>(gridSize, blockSize, dynamicSMemSize, cudaStreamDefault, pinned_instance->pangenomeGraph.getNeighborOffsets(), pinned_instance->pangenomeGraph.getNeighborValues(), pinned_instance->connectedComponentsOffsets[static_cast<DNABase_t>(sequenceBase)], pinned_instance->connectedComponentsMappings[static_cast<DNABase_t>(sequenceBase)], pinned_instance->connectedComponentsLocalIndexMappings[static_cast<DNABase_t>(sequenceBase)], pinned_instance->costsDoubleBuffer.current(), d_buffers, sequenceBase, numWarpsPerBlock, numConnectedComponents, maxConnectedComponentSize);
         }
 
         // Launch min cost kernel
@@ -345,7 +346,7 @@ namespace cuSGA {
             const auto dynamicSMemSize{SMemCalculator(cachedBlockSize)};
 
             // Launch kernel
-            KernelUtils::cudaLaunchKernel<SequenceGraphKernels::minCost>(gridSize, cachedBlockSize, dynamicSMemSize, cudaStreamDefault, *pinned_instance, scoreIdx);
+            KernelUtils::cudaLaunchKernel<SequenceGraphKernels::minCost>(gridSize, cachedBlockSize, dynamicSMemSize, cudaStreamDefault, pinned_instance->costsDoubleBuffer.current(), pinned_instance->scores, pinned_instance->pangenomeGraph.getNumNodes(), scoreIdx);
         }
 
     private:
@@ -367,29 +368,29 @@ namespace cuSGA {
     };
 
     // Insertions and propagations helper function
-    __device__ __forceinline__ void SequenceGraphKernels::processNeighbor(const SequenceGraph& __restrict__ d_sequenceGraph, Frontier* __restrict__ const warpFrontier, Frontier* __restrict__ const shared_frontier, DNABase sequenceBase, const nodeSize_t neighborIdx, const cost_t updatedCurrentLayerNeighborCost, const ::uint8_t laneIdx) {
+    __device__ __forceinline__ void SequenceGraphKernels::processNeighbor(Frontier* __restrict__ const warpFrontier, Frontier* __restrict__ const shared_frontier, cost_t* __restrict__ const d_currentCosts, DNABase sequenceBase, const nodeSize_t neighborIdx, const nodeSize_t neighborLocalIdx, const cost_t updatedCurrentLayerNeighborCost, const ::uint8_t laneIdx) {
         // Set cost to atomic min and get previous current layer neighbor cost
         // NOTE: Because in-degree for a node should be low, we can avoid doing warp / block level reduction in order to reduce overhead
-        const auto previousCurrentLayerNeighborCost{::atomicMin(&d_sequenceGraph.getCostsDoubleBuffer().current()[neighborIdx], updatedCurrentLayerNeighborCost)};
+        const auto previousCurrentLayerNeighborCost{::atomicMin(d_currentCosts + neighborIdx, updatedCurrentLayerNeighborCost)};
 
         // Get active mask
         const auto activeMask{::__activemask()};
 
         // Check for improvement
-        const auto localNeighborIdx{d_sequenceGraph.getConnectedComponentLocalIndexMapping(sequenceBase, neighborIdx)};
-        bool wantsToInsert{(updatedCurrentLayerNeighborCost < previousCurrentLayerNeighborCost) && shared_frontier->isNodeInQueue(localNeighborIdx)};
+        bool wantsToInsert{(updatedCurrentLayerNeighborCost < previousCurrentLayerNeighborCost) && !shared_frontier->isNodeInQueue(neighborLocalIdx)};
+        const auto wantsToInsertMask{::__ballot_sync(activeMask, wantsToInsert)};
 
         // Deduplicate frontier queue insertions: only thread with lowest thread index inserts
         if (wantsToInsert) {
-        // Finds a bitmask of all active threads in the warp that have the exact same neighbor index
-        unsigned matchingNeighborIdxMask{0};
-        asm volatile("match.any.sync.b32 %0, %1, %2;"
-                    : "=r"(matchingNeighborIdxMask)
-                    : "r"(neighborIdx), "r"(activeMask));
+            // Finds a bitmask of all active threads in the warp that have the exact same neighbor index
+            unsigned matchingNeighborIdxMask{0};
+            asm volatile("match.any.sync.b32 %0, %1, %2;"
+                        : "=r"(matchingNeighborIdxMask)
+                        : "r"(neighborIdx), "r"(wantsToInsertMask));
 
-        // Get the lowest lane ID among the threads that matched with this neighbor index and set improved to false for others
-        const auto lowestMatchingLane{::__ffs(static_cast<int>(matchingNeighborIdxMask)) - 1};
-        wantsToInsert = (laneIdx == lowestMatchingLane);
+            // Get the lowest lane ID among the threads that matched with this neighbor index and set improved to false for others
+            const auto lowestMatchingLane{::__ffs(static_cast<int>(matchingNeighborIdxMask)) - 1};
+            wantsToInsert = (laneIdx == lowestMatchingLane);
         }
 
         // Get improved mask
@@ -397,25 +398,46 @@ namespace cuSGA {
 
         // Get number of insertions
         const auto numInsertions{::__popc(improvedMask)};
-        const auto numInsertionsInSharedFrontier = ::min(numInsertions, SequenceGraphKernels::SHARED_FRONTIER_BUFFER_SIZE - shared_frontier->getQueueSize());
-        const auto numInsertionsInGlobalFrontier = numInsertions - numInsertionsInSharedFrontier;
+        const auto numInsertionsInSharedFrontier{::min(numInsertions, SHARED_FRONTIER_BUFFER_SIZE - shared_frontier->getQueueSize())};
+        const auto numInsertionsInGlobalFrontier{numInsertions - numInsertionsInSharedFrontier};
 
         // Check if thread passed deduplication check
         if (wantsToInsert) {
             // Get insertion offset and check if inserting in shared or global frontier
             if (const auto insertionOffset{::__popc(improvedMask & ((1u << laneIdx) - 1))}; insertionOffset < numInsertionsInSharedFrontier) {
                 // Insert node into next shared frontier
-                shared_frontier->atomicInsertNodeInQueue(neighborIdx, shared_frontier->getQueueSize() + insertionOffset);
+                shared_frontier->atomicInsertNodeInQueue(neighborLocalIdx, shared_frontier->getQueueSize() + insertionOffset);
             }
             else {
                 // Insert node into next global frontier
-                warpFrontier->atomicInsertNodeInQueue(neighborIdx, warpFrontier->getQueueSize() + insertionOffset - numInsertionsInSharedFrontier);
+                warpFrontier->atomicInsertNodeInQueue(neighborLocalIdx, warpFrontier->getQueueSize() + insertionOffset - numInsertionsInSharedFrontier);
             }
         }
 
         // Grow queue size
         shared_frontier->growQueueSize(numInsertionsInSharedFrontier);
         warpFrontier->growQueueSize(numInsertionsInGlobalFrontier);
+    }
+
+    // Insertions and propagations helper function
+    __device__ __forceinline__ void SequenceGraphKernels::processNode(const nodeSize_t nodeIdx, Frontier* __restrict__ const warpFrontier, Frontier* __restrict__ const shared_frontier, const edgeSize_t* __restrict__ const d_neighborOffsets, const nodeSize_t* __restrict__ const d_neighborValues, const connectedComponentSize_t* __restrict__ const d_connectedComponentLocalIndexMappings, cost_t* __restrict__ const d_currentCosts, const DNABase sequenceBase, const uint8_t laneIdx) {
+        // Get node cost in the current layer
+        const auto currentLayerNodeCost{d_currentCosts[nodeIdx]};
+
+        // Loop over all neighbors
+        const auto neighborsStart{d_neighborOffsets[nodeIdx]};
+        const auto neighborEnd{d_neighborOffsets[nodeIdx + 1]};
+        for (auto neighborOffset{neighborsStart}; neighborOffset < neighborEnd; ++neighborOffset) {
+            // Get neighbor index
+            const auto neighborIdx{d_neighborValues[neighborOffset]};
+            const auto neighborLocalIdx{d_connectedComponentLocalIndexMappings[neighborIdx]};
+
+            // Get updated current layer neighbor cost
+            const auto updatedCost{currentLayerNodeCost + SequenceGraph::INSERTION_COST};
+
+            // Process neighbor
+            processNeighbor(warpFrontier, shared_frontier, d_currentCosts, sequenceBase, neighborIdx, neighborLocalIdx, updatedCost, laneIdx);
+        }
     }
 } // cuSGA
 

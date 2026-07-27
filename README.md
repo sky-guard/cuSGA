@@ -154,7 +154,7 @@ The following results were obtained testing the alignment of 100 Sequences, each
 | Implementation | Platform                            | Execution Time | Speedup         | Time Reduction |
 |:---------------|:------------------------------------|:---------------|:----------------|:---------------|
 | **ParSGA**     | OpenMP (Ryzen 9 6900HS, 8 cores)    | 98s            | 1.0x            | 0%             |
-| **cuSGA**      | CUDA (NVIDIA RTX 3080 Mobile)       | **63s - 14s**  | **1.6x - 7.0x** | **36% - 86%**  |
+| **cuSGA**      | CUDA (NVIDIA RTX 3080 Mobile)       | **83s - 13s**  | **1.2x - 7.5x** | **36% - 87%**  |
 
 **These results should however be taken with a grain of salt and are not entirely reflective of what the current implementation could be able to achieve!** 
 

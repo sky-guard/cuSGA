@@ -54,8 +54,10 @@ namespace cuSGA::KernelUtils {
         // Launch kernel
         Kernel<<<gridSize, blockSize, dynamicSMemSize, stream>>>(::std::forward<Args>(args)...);
 
+#ifndef NDEBUG
         // Check for errors
         CUDA_CHECK(::cudaGetLastError());
+#endif
     }
 
     // Bump pointer allocator

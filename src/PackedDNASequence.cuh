@@ -31,6 +31,18 @@ namespace cuSGA {
             allocator->grow<::std::remove_reference_t<decltype(bases[0])>>(numChunks);
         }
 
+        // Get DNA base at a given index
+        __host__ __device__ __forceinline__ static DNABase getBase(const sequencePack_t* __restrict__ bases, const size_t idx) {
+            // Get chunk index and bit offset from node index
+            const auto chunkIdx{idx >> PACK_SHIFT};
+            const auto bitOffset{(idx & (PACKING_FACTOR - 1)) * BIT_SIZE};
+
+            // Get chunk, shift bits and extract using mask
+            const auto base{static_cast<DNABase>((bases[chunkIdx] >> bitOffset) & BITMASK)};
+
+            return base;
+        }
+
         // Default constructor
         PackedDNASequence() = default;
         // Parameterized constructor
@@ -65,6 +77,11 @@ namespace cuSGA {
         // Get number of chunks
         __host__ __device__ __forceinline__ sequenceSize_t getNumChunks() const {
             return numChunks;
+        }
+
+        // Get bases
+        __host__ __device__ __forceinline__ const sequencePack_t* __restrict__ getBases() const {
+            return bases;
         }
 
         // Get DNA base at a given index

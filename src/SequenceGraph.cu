@@ -266,6 +266,9 @@ namespace cuSGA {
             // Perform initialization step
             initialize();
 
+            // Swap costs double buffer for the next layer
+            pinned_instance->costsDoubleBuffer.swap();
+
             // Solve alignment layer by layer
             for (sequenceSize_t layerIdx{1}; layerIdx < sequence.getNumBases(); ++layerIdx) {
                 // Perform deletions for the given layer
@@ -303,111 +306,97 @@ namespace cuSGA {
         return scores;
     }
 
-    __global__ void SequenceGraphKernels::initialize(const SequenceGraph d_sequenceGraph, const DNABase initialSequenceBase) { // NOLINT
+    __global__ void SequenceGraphKernels::initialize(const sequencePack_t* __restrict__ const d_baseValues, cost_t* __restrict__ const d_currentCosts, const nodeSize_t numNodes, const DNABase initialSequenceBase) {
         // Get thread node index and check for thread overflow
-        if (const auto nodeIdx{::blockIdx.x * ::blockDim.x + ::threadIdx.x}; nodeIdx < d_sequenceGraph.getPangenomeGraph().getNumNodes()) {
+        if (const auto nodeIdx{::blockIdx.x * ::blockDim.x + ::threadIdx.x}; nodeIdx < numNodes) {
             // Get DNA base for the current node
-            const auto nodeBase{d_sequenceGraph.getPangenomeGraph().getDNABase(nodeIdx)};
+            const auto nodeBase{PackedDNASequence::getBase(d_baseValues, nodeIdx)};
 
             // Compute updated node cost
             const auto initialNodeCost{(initialSequenceBase == nodeBase)? 0 : SequenceGraph::INITIALIZATION_COST};
 
             // Initialize node cost for the next layer
-            d_sequenceGraph.getCostsDoubleBuffer().alternate()[nodeIdx] = initialNodeCost;
+            d_currentCosts[nodeIdx] = initialNodeCost;
         }
     }
 
-    __global__ void SequenceGraphKernels::substitutions(const SequenceGraph d_sequenceGraph, const DNABase sequenceBase) { // NOLINT
+    __global__ void SequenceGraphKernels::substitutions(const edgeSize_t* __restrict__ const d_neighborOffsets, const nodeSize_t* __restrict__ const d_neighborValues, const sequencePack_t* __restrict__ const d_baseValues, const cost_t* __restrict__ const d_previousCosts, cost_t* __restrict__ const d_currentCosts, const nodeSize_t numNodes, const DNABase sequenceBase) {
         // Get thread node index and check for thread overflow
-        if (const auto nodeIdx{::blockIdx.x * ::blockDim.x + ::threadIdx.x}; nodeIdx < d_sequenceGraph.getPangenomeGraph().getNumNodes()) {
+        if (const auto nodeIdx{::blockIdx.x * ::blockDim.x + ::threadIdx.x}; nodeIdx < numNodes) {
             // Get node cost in the previous layer
-            const auto previousLayerNodeCost{d_sequenceGraph.getCostsDoubleBuffer().alternate()[nodeIdx]};
+            const auto previousLayerNodeCost{d_previousCosts[nodeIdx]};
 
             // Loop over all neighbors
-            const auto neighborsStart{d_sequenceGraph.getPangenomeGraph().getNeighborsOffset(nodeIdx)};
-            const auto neighborEnd{d_sequenceGraph.getPangenomeGraph().getNeighborsOffset(nodeIdx + 1)};
+            const auto neighborsStart{d_neighborOffsets[nodeIdx]};
+            const auto neighborEnd{d_neighborOffsets[nodeIdx + 1]};
             for (auto neighborOffset{neighborsStart}; neighborOffset < neighborEnd; ++neighborOffset) {
                 // Get neighbor index
-                const auto neighborIdx{d_sequenceGraph.getPangenomeGraph().getNeighbor(neighborOffset)};
+                const auto neighborIdx{d_neighborValues[neighborOffset]};
 
                 // Get DNA base for the neighbor
-                const auto neighborBase{d_sequenceGraph.getPangenomeGraph().getDNABase(neighborIdx)};
+                const auto neighborBase{PackedDNASequence::getBase(d_baseValues, neighborIdx)};
 
                 // Compute updated node cost
                 const auto updatedCurrentLayerNeighborCost{(sequenceBase == neighborBase)? previousLayerNodeCost : (previousLayerNodeCost + SequenceGraph::SUBSTITUTION_COST)};
 
                 // Set cost to atomic min
                 // NOTE: Because in-degree for a node should be low, we can avoid doing warp / block level reduction in order to reduce overhead
-                ::atomicMin(&d_sequenceGraph.getCostsDoubleBuffer().current()[neighborIdx], updatedCurrentLayerNeighborCost);
+                ::atomicMin(d_currentCosts + neighborIdx, updatedCurrentLayerNeighborCost);
             }
         }
     }
 
-    __global__ void SequenceGraphKernels::deletions(const SequenceGraph d_sequenceGraph) { // NOLINT
+    __global__ void SequenceGraphKernels::deletions(const cost_t* __restrict__ const d_previousCosts, cost_t* __restrict__ const d_currentCosts, const nodeSize_t numNodes) {
         // Get thread node index and check for thread overflow
-        if (const auto nodeIdx{::blockIdx.x * ::blockDim.x + ::threadIdx.x}; nodeIdx < d_sequenceGraph.getPangenomeGraph().getNumNodes()) {
+        if (const auto nodeIdx{::blockIdx.x * ::blockDim.x + ::threadIdx.x}; nodeIdx < numNodes) {
             // Get node cost in the previous layer
-            const auto previousLayerNodeCost{d_sequenceGraph.getCostsDoubleBuffer().alternate()[nodeIdx]};
+            const auto previousLayerNodeCost{d_previousCosts[nodeIdx]};
 
             // Compute updated node cost
             const auto currentLayerNodeCost{previousLayerNodeCost + SequenceGraph::DELETION_COST};
 
             // Initialize node cost for the next layer
             // NOTE: Because deletions are run before propagations and used as an "initialization step" for layers different from the first, we don't need to use atomics
-            d_sequenceGraph.getCostsDoubleBuffer().current()[nodeIdx] = currentLayerNodeCost;
+            d_currentCosts[nodeIdx] = currentLayerNodeCost;
         }
     }
 
-    __global__ void SequenceGraphKernels::insertionsAndPropagations(const SequenceGraph d_sequenceGraph, const DNABase sequenceBase, const targetSize_t numWarpsPerBlock, const connectedComponentSize_t maxConnectedComponentSize, nodeSize_t* __restrict__ const d_buffers) { // NOLINT
+    __global__ void SequenceGraphKernels::insertionsAndPropagations(const edgeSize_t* __restrict__ const d_neighborOffsets, const nodeSize_t* __restrict__ const d_neighborValues, const nodeSize_t* __restrict__ const d_connectedComponentOffsets, const nodeSize_t* __restrict__ const d_connectedComponentMappings, const connectedComponentSize_t* __restrict__ const d_connectedComponentLocalIndexMappings, cost_t* __restrict__ const d_currentCosts, nodeSize_t* __restrict__ const d_buffers, const DNABase sequenceBase, const targetSize_t numWarpsPerBlock, const connectedComponentSize_t numConnectedComponents, const connectedComponentSize_t maxConnectedComponentSize) {
         // Shared memory, partitioned in the following way to guarantee alignment without wasting any space:
         //      |  buffers (nodeSize_t)  |  isInQueue (bool)  |
         extern __shared__ nodeSize_t shared_buffers[];
         const auto shared_isInQueue{(shared_buffers + numWarpsPerBlock * (SHARED_FRONTIER_BUFFER_SIZE << 1))};
 
         // Get thread warp ID and check for thread overflow
-        if (const auto warpID{(::blockIdx.x * ::blockDim.x + ::threadIdx.x) >> KernelUtils::WARP_SHIFT}; warpID < d_sequenceGraph.getNumConnectedComponents(sequenceBase)) {
+        if (const auto warpID{(::blockIdx.x * ::blockDim.x + ::threadIdx.x) >> KernelUtils::WARP_SHIFT}; warpID < numConnectedComponents) {
             // Get warp index and lane index
             const auto warpIdx{::threadIdx.x >> KernelUtils::WARP_SHIFT};
             const auto laneIdx{::threadIdx.x & (KernelUtils::WARP_SIZE - 1)};
 
-            // Get connected component details
-            const auto connectedComponentStart{d_sequenceGraph.getConnectedComponentOffset(sequenceBase, warpID)};
-            const auto connectedComponentEnd{d_sequenceGraph.getConnectedComponentOffset(sequenceBase, warpID + 1)};
+            // Get connected component data
+            const auto connectedComponentStart{d_connectedComponentOffsets[warpID]};
+            const auto connectedComponentEnd{d_connectedComponentOffsets[warpID + 1]};
             const auto connectedComponentSize{connectedComponentEnd - connectedComponentStart};
             const auto packedQueueSize{(maxConnectedComponentSize + Frontier::PACKING_FACTOR - 1) >> Frontier::PACK_SHIFT};
 
             // Get shared frontier
             const auto shared_buffersBase{shared_buffers + ((warpIdx * SHARED_FRONTIER_BUFFER_SIZE) << 1)};
             const DoubleBuffer shared_doubleBuffer{SHARED_FRONTIER_BUFFER_SIZE, shared_buffersBase, shared_buffersBase + SHARED_FRONTIER_BUFFER_SIZE, 0, false};
-            Frontier shared_frontier{0, 0, shared_doubleBuffer, shared_isInQueue + warpIdx * packedQueueSize, true};
+            Frontier shared_frontier{0, 0, shared_doubleBuffer, shared_isInQueue + warpIdx * packedQueueSize};
 
             // Get warp frontier
             const auto d_buffersBase{d_buffers + (connectedComponentStart << 1)};
             const DoubleBuffer warpDoubleBuffer{connectedComponentSize, d_buffersBase, d_buffersBase + connectedComponentSize, 0, false};
-            Frontier warpFrontier{0, 0, warpDoubleBuffer, shared_isInQueue + warpIdx * packedQueueSize, true};
+            Frontier warpFrontier{0, 0, warpDoubleBuffer, shared_isInQueue + warpIdx * packedQueueSize};
 
             // Perform insertions
             // Visit all neighbors of nodes in the current connected component (using stride access)
             for (auto connectedComponentIdx{connectedComponentStart + laneIdx}; connectedComponentIdx < connectedComponentEnd; connectedComponentIdx += KernelUtils::WARP_SIZE) {
                 // Get node index
-                const auto nodeIdx{d_sequenceGraph.getConnectedComponentMapping(sequenceBase, connectedComponentIdx)};
+                const auto nodeIdx{d_connectedComponentMappings[connectedComponentIdx]};
 
-                // Get node cost in the current layer
-                const auto currentLayerNodeCost{d_sequenceGraph.getCostsDoubleBuffer().current()[nodeIdx]};
-
-                // Loop over all neighbors
-                const auto neighborsStart{d_sequenceGraph.getPangenomeGraph().getNeighborsOffset(nodeIdx)};
-                const auto neighborEnd{d_sequenceGraph.getPangenomeGraph().getNeighborsOffset(nodeIdx + 1)};
-                for (auto neighborOffset{neighborsStart}; neighborOffset < neighborEnd; ++neighborOffset) {
-                    // Get neighbor index
-                    const auto neighborIdx{d_sequenceGraph.getPangenomeGraph().getNeighbor(neighborOffset)};
-
-                    // Get updated current layer neighbor cost
-                    const auto updatedCurrentLayerNeighborCost{currentLayerNodeCost + SequenceGraph::INSERTION_COST};
-
-                    // Process neighbor
-                    processNeighbor(d_sequenceGraph, &warpFrontier, &shared_frontier, sequenceBase, neighborIdx, updatedCurrentLayerNeighborCost, laneIdx);
-                }
+                // Process node
+                processNode(nodeIdx, &warpFrontier, &shared_frontier, d_neighborOffsets, d_neighborValues, d_connectedComponentLocalIndexMappings, d_currentCosts, sequenceBase, laneIdx);
             }
 
             // Swap frontier
@@ -417,54 +406,31 @@ namespace cuSGA {
             // Perform propagations
             while (!(shared_frontier.isEmpty() && warpFrontier.isEmpty())) {
                 // Empty frontier queue if necessary
+                const auto shared_queue{shared_frontier.getIsInQueue()};
                 for (nodeSize_t queuePackIdx{laneIdx}; queuePackIdx < packedQueueSize; queuePackIdx += KernelUtils::WARP_SIZE) {
-                    warpFrontier.getIsInQueue()[queuePackIdx] = 0;
+                    shared_queue[queuePackIdx] = 0;
                 }
 
                 // Visit all neighbors of nodes in the current shared frontier (using stride access)
-                for (nodeSize_t frontierIdx{laneIdx}; frontierIdx < shared_frontier.getSize(); frontierIdx += KernelUtils::WARP_SIZE) {
+                const auto sharedFrontierSize{shared_frontier.getSize()};
+                const auto* __restrict__ const sharedFrontierValues{shared_frontier.getValues()};
+                for (nodeSize_t frontierIdx{laneIdx}; frontierIdx < sharedFrontierSize; frontierIdx += KernelUtils::WARP_SIZE) {
                     // Get node index
-                    const auto nodeIdx{shared_frontier.getValue(frontierIdx)};
+                    const auto nodeIdx{sharedFrontierValues[frontierIdx]};
 
-                    // Get node cost in the current layer
-                    const auto currentLayerNodeCost{d_sequenceGraph.getCostsDoubleBuffer().current()[nodeIdx]};
-
-                    // Loop over all neighbors
-                    const auto neighborsStart{d_sequenceGraph.getPangenomeGraph().getNeighborsOffset(nodeIdx)};
-                    const auto neighborEnd{d_sequenceGraph.getPangenomeGraph().getNeighborsOffset(nodeIdx + 1)};
-                    for (auto neighborOffset{neighborsStart}; neighborOffset < neighborEnd; ++neighborOffset) {
-                        // Get neighbor index
-                        const auto neighborIdx{d_sequenceGraph.getPangenomeGraph().getNeighbor(neighborOffset)};
-
-                        // Get updated current layer neighbor cost
-                        const auto updatedCurrentLayerNeighborCost{currentLayerNodeCost + SequenceGraph::INSERTION_COST};
-
-                        // Process neighbor
-                        processNeighbor(d_sequenceGraph, &warpFrontier, &shared_frontier, sequenceBase, neighborIdx, updatedCurrentLayerNeighborCost, laneIdx);
-                    }
+                    // Process node
+                    processNode(nodeIdx, &warpFrontier, &shared_frontier, d_neighborOffsets, d_neighborValues, d_connectedComponentLocalIndexMappings, d_currentCosts, sequenceBase, laneIdx);
                 }
 
                 // Visit all neighbors of nodes in the current global frontier (using stride access)
-                for (nodeSize_t frontierIdx{laneIdx}; frontierIdx < warpFrontier.getSize(); frontierIdx += KernelUtils::WARP_SIZE) {
+                const auto warpFrontierSize{warpFrontier.getSize()};
+                const auto* __restrict__ const warpFrontierValues{warpFrontier.getValues()};
+                for (nodeSize_t frontierIdx{laneIdx}; frontierIdx < warpFrontierSize; frontierIdx += KernelUtils::WARP_SIZE) {
                     // Get node index
-                    const auto nodeIdx{warpFrontier.getValue(frontierIdx)};
+                    const auto nodeIdx{warpFrontierValues[frontierIdx]};
 
-                    // Get node cost in the current layer
-                    const auto currentLayerNodeCost{d_sequenceGraph.getCostsDoubleBuffer().current()[nodeIdx]};
-
-                    // Loop over all neighbors
-                    const auto neighborsStart{d_sequenceGraph.getPangenomeGraph().getNeighborsOffset(nodeIdx)};
-                    const auto neighborEnd{d_sequenceGraph.getPangenomeGraph().getNeighborsOffset(nodeIdx + 1)};
-                    for (auto neighborOffset{neighborsStart}; neighborOffset < neighborEnd; ++neighborOffset) {
-                        // Get neighbor index
-                        const auto neighborIdx{d_sequenceGraph.getPangenomeGraph().getNeighbor(neighborOffset)};
-
-                        // Get updated current layer neighbor cost
-                        const auto updatedCurrentLayerNeighborCost{currentLayerNodeCost + SequenceGraph::INSERTION_COST};
-
-                        // Process neighbor
-                        processNeighbor(d_sequenceGraph, &warpFrontier, &shared_frontier, sequenceBase, neighborIdx, updatedCurrentLayerNeighborCost, laneIdx);
-                    }
+                    // Process node
+                    processNode(nodeIdx, &warpFrontier, &shared_frontier, d_neighborOffsets, d_neighborValues, d_connectedComponentLocalIndexMappings, d_currentCosts, sequenceBase, laneIdx);
                 }
 
                 // Swap frontier
@@ -474,7 +440,7 @@ namespace cuSGA {
         }
     }
 
-    __global__ void SequenceGraphKernels::minCost(const SequenceGraph d_sequenceGraph, const scoreSize_t scoreIdx) { // NOLINT
+    __global__ void SequenceGraphKernels::minCost(const cost_t* __restrict__ const d_currentCosts, cost_t* __restrict__ const d_scores, const nodeSize_t numNodes, const scoreSize_t scoreIdx) {
         // Shared memory array to store the warp-level minima inside the block
         extern __shared__ cost_t shared_minCosts[];
 
@@ -486,8 +452,8 @@ namespace cuSGA {
 
         // Grid-level reduction using stride (safe for overflowing threads)
         const auto stride{::blockDim.x * ::gridDim.x};
-        for (nodeSize_t nodeIdx{threadId}; nodeIdx < d_sequenceGraph.getPangenomeGraph().getNumNodes(); nodeIdx += stride) {
-            const cost_t cost{d_sequenceGraph.getCostsDoubleBuffer().current()[nodeIdx]};
+        for (nodeSize_t nodeIdx{threadId}; nodeIdx < numNodes; nodeIdx += stride) {
+            const cost_t cost{d_currentCosts[nodeIdx]};
             threadMinCost = ::min(cost, threadMinCost);
         }
 
@@ -521,7 +487,7 @@ namespace cuSGA {
 
             // Final grid-level reduction using the first thread of each block
             if (laneIdx == 0) {
-                ::atomicMin(&d_sequenceGraph.getScores()[scoreIdx], threadMinCost);
+                ::atomicMin(d_scores + scoreIdx, threadMinCost);
             }
         }
     }

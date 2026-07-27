@@ -73,12 +73,22 @@ namespace cuSGA {
             return baseValues[nodeIdx];
         }
 
+        // Get neighbor values
+        __host__ __device__ __forceinline__ nodeSize_t* __restrict__ getNeighborValues() const {
+            return columnValues;
+        }
+
         // Get neighbor for a given edge index
         __host__ __device__ __forceinline__ nodeSize_t getNeighbor(const edgeSize_t edgeIdx) const {
             return columnValues[edgeIdx];
         }
 
-        // Get neighbors for a given node index
+        // Get neighbor offsets
+        __host__ __device__ __forceinline__ edgeSize_t* __restrict__ getNeighborOffsets() const {
+            return rowOffsets;
+        }
+
+        // Get neighbors offset for a given node index
         __host__ __device__ __forceinline__ edgeSize_t getNeighborsOffset(const nodeSize_t nodeIdx) const {
             // Get row offset for current node
             return rowOffsets[nodeIdx];

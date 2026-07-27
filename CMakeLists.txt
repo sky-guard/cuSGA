@@ -27,14 +27,13 @@ add_executable(cuSGA src/main.cu
         src/DoubleBuffer.cuh
         src/ApplicationSettings.cuh
         src/KernelUtils.cuh
-        src/Frontier.cu
         src/Frontier.cuh
         src/Utils.cuh
 )
 
-set_target_properties(cuSGA PROPERTIES
-        CUDA_SEPARABLE_COMPILATION ON)
+set_target_properties(cuSGA PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 
 target_compile_options(cuSGA PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--extended-lambda>)
+target_compile_options(cuSGA PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--ptxas-options=-v>)
 
 target_link_libraries(cuSGA PRIVATE CLI11::CLI11)

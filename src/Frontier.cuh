@@ -28,11 +28,9 @@ namespace cuSGA {
 
         // Default constructor
         Frontier() = default;
-        // Parameterized constructor
-        __host__ Frontier(nodeSize_t size, bool ownsInstance, Frontier* __restrict__ pinned_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
 
         // Parameterized constructor
-        __host__ __device__ __forceinline__ Frontier(const nodeSize_t currentSize, const nodeSize_t alternateSize, const DoubleBuffer<nodeSize_t>& __restrict__ doubleBuffer, queuePack_t* const isInQueue, const bool ownsInstance, Frontier* __restrict__ const pinned_instance = nullptr, Frontier* __restrict__ const d_instance = nullptr) : currentSize{currentSize}, alternateSize{alternateSize}, doubleBuffer{doubleBuffer}, isInQueue{isInQueue}, ownsInstance{ownsInstance}, pinned_instance{pinned_instance}, d_instance{d_instance} {}
+        __host__ __device__ __forceinline__ Frontier(const nodeSize_t currentSize, const nodeSize_t alternateSize, const DoubleBuffer<nodeSize_t>& __restrict__ doubleBuffer, queuePack_t* const isInQueue) : currentSize{currentSize}, alternateSize{alternateSize}, doubleBuffer{doubleBuffer}, isInQueue{isInQueue} {}
 
         // Copy constructor
         Frontier(const Frontier& other) = default;
@@ -44,11 +42,6 @@ namespace cuSGA {
         Frontier& operator=(Frontier&& other) = default;
         // Destructor
         ~Frontier() = default;
-
-        // Move frontier to device
-        __host__ Frontier copyToDevice(Frontier* __restrict__ d_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
-        // Free frontier
-        __host__ void free() const;
 
         // Get frontier size
         __host__ __device__ __forceinline__ nodeSize_t getSize() const {
@@ -70,6 +63,11 @@ namespace cuSGA {
             return currentSize == 0;
         }
 
+        // Get frontier values
+        __host__ __device__ __forceinline__ const nodeSize_t* __restrict__ getValues() const {
+            return doubleBuffer.current();
+        }
+
         // Get node index for a given index
         __host__ __device__ __forceinline__ nodeSize_t getValue(const nodeSize_t frontierIdx) const {
             return doubleBuffer.current()[frontierIdx];
@@ -78,16 +76,6 @@ namespace cuSGA {
         // Get isInQueue array
         __host__ __device__ __forceinline__ queuePack_t* getIsInQueue() const {
             return isInQueue;
-        }
-
-        // Get pinned instance
-        __host__ __device__ __forceinline__ Frontier* __restrict__ getPinnedInstance() const {
-            return pinned_instance;
-        }
-
-        // Get device instance
-        __host__ __device__ __forceinline__ Frontier* __restrict__ getDeviceInstance() const {
-            return d_instance;
         }
 
         // Get buffers root
@@ -142,7 +130,7 @@ namespace cuSGA {
             const auto bitmask = BITMASK << (nodeIdx & (PACKING_FACTOR - 1));
 
             // Perform atomic OR to set bit
-            ::atomicOr(&isInQueue[chunkIdx], bitmask);
+            ::atomicOr(isInQueue + chunkIdx, bitmask);
         }
 
         // Swap from queue to next frontier
@@ -161,21 +149,14 @@ namespace cuSGA {
             this->alternateSize = ::__shfl_sync(mask, alternateSize, srcLaneIdx);
             this->doubleBuffer.shuffle_sync(mask, srcLaneIdx);
             this->isInQueue = reinterpret_cast<decltype(isInQueue)>(::__shfl_sync(mask, reinterpret_cast<unsigned long long>(isInQueue), srcLaneIdx));
-            this->ownsInstance = ::__shfl_sync(mask, ownsInstance, srcLaneIdx);
-            this->pinned_instance = reinterpret_cast<decltype(pinned_instance)>(::__shfl_sync(mask, reinterpret_cast<unsigned long long>(pinned_instance), srcLaneIdx));
-            this->d_instance = reinterpret_cast<decltype(d_instance)>(::__shfl_sync(mask, reinterpret_cast<unsigned long long>(d_instance), srcLaneIdx));
         }
 
     private:
         // Frontier implementation
-        // NOTE: Uses pinned memory and linearized memory layout on the device memory
         nodeSize_t currentSize{0};
         nodeSize_t alternateSize{0};
         DoubleBuffer<nodeSize_t> doubleBuffer{};
         queuePack_t* isInQueue{nullptr};
-        bool ownsInstance{false};
-        Frontier* __restrict__ pinned_instance{nullptr};
-        Frontier* __restrict__ d_instance{nullptr};
     };
 } // cuSGA
 
