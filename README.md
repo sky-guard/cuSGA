@@ -151,10 +151,10 @@ cuSGA expects the following Input Files:
 
 The following results were obtained testing the alignment of 100 Sequences, each one of length ~10k, to the Pangenome Graph of Salmonella, which consists roughly of ~10k nodes / edges, using a variety of Connected Component sizes:
 
-| Implementation         | Platform                            | Execution Time | Speedup         | Time Reduction |
-|:-----------------------|:------------------------------------|:---------------|:----------------|:---------------|
-| **ParSGA (CPU)**       | OpenMP (8 cores)                    | 98s            | 1.0x            | 0%             |
-| **CUDA-ParSGA (Ours)** | NVIDIA GPU (NVIDIA RTX 3080 Mobile) | **63s - 14s**  | **1.6x - 7.0x** | **36% - 86%**  |
+| Implementation | Platform                            | Execution Time | Speedup         | Time Reduction |
+|:---------------|:------------------------------------|:---------------|:----------------|:---------------|
+| **ParSGA**     | OpenMP (8 cores)                    | 98s            | 1.0x            | 0%             |
+| **cuSGA**      | NVIDIA GPU (NVIDIA RTX 3080 Mobile) | **63s - 14s**  | **1.6x - 7.0x** | **36% - 86%**  |
 
 **These results should however be taken with a grain of salt and are not entirely reflective of what the current implementation could be able to achieve!** 
 
