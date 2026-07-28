@@ -13,37 +13,53 @@ cuSGA is a CUDA implementation of the ParSGA Algorithm. As such, it implements f
 * Insertions and Propagations.
 * Minimum Cost.
 
-While the first three and the last map quite nicely to the CUDA Parallel Architecture due to their mostly regular nature, the fourth one was for sure the most challenging to implement in a performant way and represents, for sure, the bottleneck of the program **(94% - 99% of execution time)**.
+The first three kernels and the last one map quite nicely to the CUDA Parallel Architecture due to their mostly regular nature, making them quite straightforward and easy to implement. **The fourth kernel, on the other hand, deserves some more attention**, as it was for sure the most challenging one to implement in a performant way and represents the bottleneck of the entire program **(94% - 99% of execution time)**.
 
-A first attempt was made by implementing a Global-level Frontier and performing a BFS-like exploration to propagate the Insertion improvements across all Nodes, disregarding Connected Components completely. While this worked, it turned out to be not performant at all, due to the excessive amount of Data Transfers between Host and Device to handle the Frontier status, as well as the Overhead Cost of launching a new Kernel for each level of the BFS. These issues were made evident by the profiling results, collected using NSight Systems and Nsight Compute, and thus demanded an architectural shift in perspective.
+A first parallelization attempt was made by implementing a **Global-level Frontier and performing a BFS-like exploration over the entire Graph** to propagate the Insertion improvements across all Nodes, disregarding Connected Components completely. While this worked, it turned out to be **not performant at all**, due to the excessive amount of Data Transfers between Host and Device necessary to handle the Frontier status, as well as the Overhead Cost of launching a new Kernel instance for each level of the BFS. These issues were made evident by the profiling results, collected using NSight Systems and Nsight Compute, and thus demanded an architectural shift in perspective.
 
-However, both of these problems were solved by running the BFS-like exploration algorithm in its entirety on the GPU, using only one single Kernel. Normally this wouldn't have been possible due to the exploration requiring synchronization across the entire Graph, but was in fact possible in this case exactly thanks to the presence of Connected Components.
+Both of these problems stemmed from the fact that **performing an exploration over the entirety of the Graph all at once inherently required some form of Grid-level synchronization, which proved to be too costly to achieve in this case**. **However, thanks to the presence of Connected Components, Grid-level synchronization was in fact not necessary at all: the exploration could instead be carried out across the Nodes of each Connected Component individually, in a completely independent manner**. This turned out to be the key to solving this challenge, as it made possible to run the BFS-like exploration algorithm in its entirety on the GPU all at once, using only a single Kernel launch per layer.
 
-Thus, **I decided to map one Warp per Connected Component and perform the same BFS-like exploration as before, but on a per Connected Component level**.
+Thus, **I made the decision to map one Warp per Connected Component and perform the same BFS-like exploration as before, but at a per Connected Component level**. This is because **mapping one Thread per Connected Component would have been too costly** for a few different reasons:
 
-Here are the following reasons why:
+* **Inability to exploit parallelism inside the exploration of the single Connected Component**, whose size, according to the research, could be up to 1500 - 2000 Nodes, which is plenty for parallelism to be exploited.
 
-* **Minimize thread divergence and Uncoalesced Memory Accesses**, since mapping one Thread per Connected Component could have very different results based on how uniform the Connected Components Sizes are and how far they are stored in memory.
+* **Thread Divergence and Uncoalesced Memory Accesses across Threads of the same Warp**, due to varying Connected Component sizes and how Connected Components data is stored in memory and meant to be accessed. 
 
+* **Inability to fully utilize the power of Warp-level Synchronization Primitives and Shuffling Operations**, which can be used to efficiently coordinate exploration using a shared Warp-level Frontier.
 
-* **Fully utilize the power of Warp-level Synchronization Primitives and Shuffling Operations**, which perfectly fit the problem of handling a Warp-level Shared Frontier.
+On the other hand, **mapping one Block per Connected Component would have been equally inefficient**:
 
+* **Inability to exploit parallelism along the real dimension of the problem**, which is not Connected Component Size (which stays relatively fixed, as shown by research in the papers), but rather the number of Connected Components that can be processed in parallel at the same time.
 
-* **Research in the papers shows that the Maximum Connected Component Size stays relatively fixed across different Pangenomes and is roughly equal to ~1500 Nodes**, which is plenty enough for a Warp to handle. **This also means that the main way the Input Size grows is not Connected Component Size, but in fact the Number of Connected Components!** So that is what the Algorithm should prioritize in its implementation.
+It would take me far too long to list all the possible optimizations and areas of improvement that were taken into consideration during the development of this project, however here are some of the most important to note and that had a positive effective in helping to boost the final performance of the program:
 
-Other optimizations were also implemented in the process, such as **Double Buffers** (used both in the Frontier and the Costs Layer in order to minimize synchronizations and memory footprint), a **Shared Memory Frontier Scratchpad** (to help boost the performance when the number of Insertions being propagated at a certain time fits below a certain fixed size, which heuristically i expect to be relatively low) and **Shared Memory Frontier Bit-Packed Queue** (which I found out could be fitted entirely in Shared Memory with a low enough memory footprint by doing some calculations).
+* **Bit-Packing**, in order to reduce the memory footprint and transfer times of linear data structures.
 
-Lastly, a final round of profiling through NSight Systems and NSight Compute showed that the situation improved significantly. Now, the remaining bottlenecks identified by the profiler are:
+* **Double-Buffering**, used both in the Frontier and Costs layers to minimize synchronizations and memory footprint.
 
-* Device Utilization.
+* **Usage of Shared Memory**, utilized wherever possible in order to reduce Global Memory access latency, while also keeping track of the overall memory footprint of what was stored inside it, in order for it not to be a limiting factor when determining final SM Occupancy.
+
+* **Run-Time Block Size Fine-Tuning**, to dynamically size Blocks based on the current hardware capabilities through the provided CUDA Occupancy API.
+
+* **Register Occupancy Fine-Tuning**, to minimize Register Usage, which turned out to be one of the limiting factors for the kernel's performance, and make sure no Local Memory Spills were happening. 
+
+* **Minimization of Synchronization points and Usage of Asynchronous Operations through Pinned Memory**, further improved by using a custom Linearized Data Layout on the Host Side to speed up Data Transfers and minimize Driver Overhead as much as possible.
+
+* **Loop Unrolling and Function Inlining**, to help squeeze as much performance as possible from the compiler, keeping an eye on Register Occupancy in order to avoid Local Memory Spilling.
+
+Lastly, a final round of profiling through NSight Systems and NSight Compute showed that the situation improved significantly. **The remaining bottlenecks identified by the profiler are the following**:
+
+* **Device Utilization**.
 
   ***NOTE**: Not a real problem, read [Performance & Results](#performance--results) for more information.*
 
-* SM Occupancy.
+* **SM Occupancy**.
 
-* Memory Access Pattern.
+  ***NOTE**: Further testing needs to be done to determine whether this is a real problem or not. NCU reported the actual number of Active Threads being much lower than the expected theoretical limit of around 85% - 90% (caused by a somewhat high Register Usage of 48 Registers per Thread). However, this could partially be caused by the insufficient input size, as stated in [Performance & Results](#performance--results), as well as the number of Insertions that can be propagated at the same time being lower than the size of a Warp. This is, heuristically, to be expected, but could be mitigated by larger Connected Component Sizes.*
 
-  ***NOTE**: This is part of the nature of the problem itself, so not much can be done to improve this. Keeping the Nodes in the Frontier sorted could potentially help with this.*
+* **Memory Access Pattern**.
+
+  ***NOTE**: As this is part of the nature of the problem itself, not much can be done to improve this. Keeping the Nodes in the Frontier sorted could potentially help.*
 
 ---
 
@@ -67,7 +83,7 @@ Clone the project's repository:
 git clone https://github.com/sky-guard/cuSGA.git
 ```
 
-### 2. Build with CMake
+### 2. Build using CMake
 
 First, navigate to the project's directory (or wherever you cloned the project):
 ```bash
@@ -160,16 +176,13 @@ The following results were obtained testing the alignment of 100 Sequences, each
 
 In fact, there were a few critical problems that occurred during testing:
 
-* **The input size is nowhere near large enough to achieve full SM occupancy**. Using some maths and profiling, I was able to deduce that (for my hardware) in order to schedule at least one block per SM, I would require an input size that is orders of magnitude larger than what I have currently available to me:
+* **The current input size was nowhere near large enough to achieve full SM occupancy**. The **1.4x speedup** was achieved scheduling **only a single block**, while the **8.2x speedup** was achieved scheduling **only 16 blocks**. Therefore, if the input size were big enough to saturate all SMs, **cuSGA could theoretically achieve numbers that are much higher than this: possibly even 20x - 70x**, assuming Memory Bandwidth doesn't become the limiting factor. Using some maths and profiling, it was possible for me to deduce that in order to schedule at least one block per SM (according to my hardware), the input size would have to be orders of magnitude larger than the one that was used in the current testing:
 
   ```
   REALISTIC_CC_SIZE(~=1000) * NUMBER_OF_WARPS_PER_BLOCK(=20) * NUMBER_OF_SM(=48) ~= 1Mil Nodes
   ```
-  
-  However, this is also a good thing, because it means that the **real speedup could be up to x20 - x70!** This is obviously very optimistic, but further testing needs to be done.
 
-
-* **The Connected Components of varying size were simulated by grouping together smaller Components, meaning that the components generated were composed roughly of the same number of nodes. However, this is not guaranteed to be the case with real data!** Further testing using real data should be done, since this could limit the theoretical peak performance that could be achieved due to some Warps taking much longer to complete their work compared to others. 
+* **The Connected Components of varying size were simulated by grouping together smaller Components, meaning that the components generated were composed roughly of the same number of nodes**. **However, this is not guaranteed to be the case with real data!** Further testing using actual data should be done, as this could be a limiting factor for the theoretical peak performance of the algorithm: if the Connected Component Sizes were highly irregular, some Warps could end up taking a lot longer to complete their work compared to other Warps in the same Block, hogging hardware resources until the whole Block finishes its computation. 
 
 ---
 
