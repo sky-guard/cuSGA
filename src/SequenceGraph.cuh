@@ -373,56 +373,53 @@ namespace cuSGA {
         // NOTE: Because in-degree for a node should be low, we can avoid doing warp / block level reduction in order to reduce overhead
         const auto previousCurrentLayerNeighborCost{::atomicMin(d_currentCosts + neighborIdx, updatedCurrentLayerNeighborCost)};
 
-        // Get active mask
-        const auto activeMask{::__activemask()};
-
         // Check for improvement
         bool wantsToInsert{(updatedCurrentLayerNeighborCost < previousCurrentLayerNeighborCost) && !shared_frontier->isNodeInQueue(neighborLocalIdx)};
-        const auto wantsToInsertMask{::__ballot_sync(activeMask, wantsToInsert)};
+        if (!wantsToInsert) {
+            return;
+        }
 
         // Deduplicate frontier queue insertions: only thread with lowest thread index inserts
-        if (wantsToInsert) {
-            // Finds a bitmask of all active threads in the warp that have the exact same neighbor index
-            unsigned matchingNeighborIdxMask{0};
-            asm volatile("match.any.sync.b32 %0, %1, %2;"
-                        : "=r"(matchingNeighborIdxMask)
-                        : "r"(neighborIdx), "r"(wantsToInsertMask));
+        // Finds a bitmask of all active threads in the warp that have the exact same neighbor index
+        unsigned matchingNeighborIdxMask{0};
+        asm volatile("match.any.sync.b32 %0, %1, %2;"
+                    : "=r"(matchingNeighborIdxMask)
+                    : "r"(neighborIdx), "r"(::__activemask()));
 
-            // Get the lowest lane ID among the threads that matched with this neighbor index and set improved to false for others
-            const auto lowestMatchingLane{::__ffs(static_cast<int>(matchingNeighborIdxMask)) - 1};
-            wantsToInsert = (laneIdx == lowestMatchingLane);
+        // Get the lowest lane ID among the threads that matched with this neighbor index and set improved to false for others
+        const auto lowestMatchingLane{::__ffs(static_cast<int>(matchingNeighborIdxMask)) - 1};
+        wantsToInsert = (laneIdx == lowestMatchingLane);
+        if (!wantsToInsert) {
+            return;
         }
 
         // Get improved mask
-        const auto improvedMask{::__ballot_sync(activeMask, wantsToInsert)};
+        const auto improvedMask{::__ballot_sync(::__activemask(), wantsToInsert)};
 
         // Get number of insertions
         const auto numInsertions{::__popc(improvedMask)};
         const auto numInsertionsInSharedFrontier{::min(numInsertions, SHARED_FRONTIER_BUFFER_SIZE - shared_frontier->getQueueSize())};
         const auto numInsertionsInGlobalFrontier{numInsertions - numInsertionsInSharedFrontier};
 
-        // Check if thread passed deduplication check
-        if (wantsToInsert) {
-            // Get insertion offset and check if inserting in shared or global frontier
-            if (const auto insertionOffset{::__popc(improvedMask & ((1u << laneIdx) - 1))}; insertionOffset < numInsertionsInSharedFrontier) {
-                // Insert node into next shared frontier
-                shared_frontier->atomicInsertNodeInQueue(neighborLocalIdx, shared_frontier->getQueueSize() + insertionOffset);
-            }
-            else {
-                // Insert node into next global frontier
-                warpFrontier->atomicInsertNodeInQueue(neighborLocalIdx, warpFrontier->getQueueSize() + insertionOffset - numInsertionsInSharedFrontier);
-            }
-        }
-
         // Grow queue size
         shared_frontier->growQueueSize(numInsertionsInSharedFrontier);
         warpFrontier->growQueueSize(numInsertionsInGlobalFrontier);
+
+        // Get insertion offset and check if inserting in shared or global frontier
+        if (const auto insertionOffset{::__popc(improvedMask & ((1u << laneIdx) - 1))}; insertionOffset < numInsertionsInSharedFrontier) {
+            // Insert node into next shared frontier
+            shared_frontier->atomicInsertNodeInQueue(neighborLocalIdx, shared_frontier->getQueueSize() + insertionOffset);
+        }
+        else {
+            // Insert node into next global frontier
+            warpFrontier->atomicInsertNodeInQueue(neighborLocalIdx, warpFrontier->getQueueSize() + insertionOffset - numInsertionsInSharedFrontier);
+        }
     }
 
     // Insertions and propagations helper function
     __device__ __forceinline__ void SequenceGraphKernels::processNode(const nodeSize_t nodeIdx, Frontier* __restrict__ const warpFrontier, Frontier* __restrict__ const shared_frontier, const edgeSize_t* __restrict__ const d_neighborOffsets, const nodeSize_t* __restrict__ const d_neighborValues, const connectedComponentSize_t* __restrict__ const d_connectedComponentLocalIndexMappings, cost_t* __restrict__ const d_currentCosts, const DNABase sequenceBase, const uint8_t laneIdx) {
-        // Get node cost in the current layer
-        const auto currentLayerNodeCost{d_currentCosts[nodeIdx]};
+        // Get updated current layer neighbor cost
+        const auto updatedCurrentLayerNeighborCost{d_currentCosts[nodeIdx] + SequenceGraph::INSERTION_COST};
 
         // Loop over all neighbors
         const auto neighborsStart{d_neighborOffsets[nodeIdx]};
@@ -432,11 +429,8 @@ namespace cuSGA {
             const auto neighborIdx{d_neighborValues[neighborOffset]};
             const auto neighborLocalIdx{d_connectedComponentLocalIndexMappings[neighborIdx]};
 
-            // Get updated current layer neighbor cost
-            const auto updatedCost{currentLayerNodeCost + SequenceGraph::INSERTION_COST};
-
             // Process neighbor
-            processNeighbor(warpFrontier, shared_frontier, d_currentCosts, sequenceBase, neighborIdx, neighborLocalIdx, updatedCost, laneIdx);
+            processNeighbor(warpFrontier, shared_frontier, d_currentCosts, sequenceBase, neighborIdx, neighborLocalIdx, updatedCurrentLayerNeighborCost, laneIdx);
         }
     }
 } // cuSGA
