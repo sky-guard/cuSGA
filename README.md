@@ -55,7 +55,7 @@ Lastly, a final round of profiling through NSight Systems and NSight Compute sho
 
 * **SM Occupancy**.
 
-  ***NOTE**: Further testing needs to be done to determine whether this is a real problem or not. NCU reported the actual number of Active Threads being much lower than the expected theoretical limit of around 85% - 90% (caused by a somewhat high Register Usage of 48 Registers per Thread). However, this could partially be caused by the insufficient input size, as stated in [Performance & Results](#performance--results), as well as the number of Insertions that can be propagated at the same time being lower than the size of a Warp. This is, heuristically, to be expected, but could be mitigated by larger Connected Component Sizes.*
+  ***NOTE**: Further testing needs to be done to determine whether this is a real problem or not. NCU reported the actual number of Active Threads being much lower than the expected theoretical limit of around 85% - 90% (caused by a somewhat high Register Usage of 55 Registers per Thread). However, this could partially be caused by the insufficient input size, as stated in [Performance & Results](#performance--results), as well as the number of Insertions that can be propagated at the same time being lower than the size of a Warp. This is, heuristically, to be expected, but could be mitigated by larger Connected Component Sizes.*
 
 * **Memory Access Pattern**.
 
@@ -153,6 +153,7 @@ cuSGA expects the following Input Files:
   NUMBER_OF_CONNECTED_COMPONENTS
   CONNECTED_COMPONENT_OFFSETS
   NODE_MAPPINGS
+  CONNECTED_COMPONENT_REVERSE_MAPPINGS
   ```
 
   ***NOTE**: cuSGA will automatically look for these files under the following naming convention:*
@@ -170,7 +171,7 @@ The following results were obtained testing the alignment of 100 Sequences, each
 | Implementation | Platform                            | Execution Time | Speedup         | Time Reduction |
 |:---------------|:------------------------------------|:---------------|:----------------|:---------------|
 | **ParSGA**     | OpenMP (Ryzen 9 6900HS, 8 cores)    | 98s            | 1.0x            | 0%             |
-| **cuSGA**      | CUDA (NVIDIA RTX 3080 Mobile)       | **70s - 12s**  | **1.4x - 8.2x** | **29% - 88%**  |
+| **cuSGA**      | CUDA (NVIDIA RTX 3080 Mobile)       | **90s - 14s**  | **1.1x - 7.0x** | **8% - 86%**   |
 
 **These results should however be taken with a grain of salt and are not entirely reflective of what the current implementation could be able to achieve!** 
 

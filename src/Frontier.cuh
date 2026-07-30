@@ -97,6 +97,11 @@ namespace cuSGA {
             this->currentSize = size;
         }
 
+        // Set frontier queue size
+        __host__ __device__ __forceinline__ void setQueueSize(const nodeSize_t size) {
+            this->alternateSize = size;
+        }
+
         // Grow frontier queue size
         __host__ __device__ __forceinline__ void growQueueSize(const nodeSize_t count = 1) {
             this->alternateSize += count;

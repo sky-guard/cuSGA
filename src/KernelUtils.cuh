@@ -60,6 +60,13 @@ namespace cuSGA::KernelUtils {
 #endif
     }
 
+    // PTX lanemask instruction helper
+    __device__ __forceinline__ unsigned lanemask_lt() {
+        unsigned mask;
+        asm("mov.u32 %0, %%lanemask_lt;" : "=r"(mask));
+        return mask;
+    }
+
     // Bump pointer allocator
     class BumpPtrAllocator {
     public:

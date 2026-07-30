@@ -6,7 +6,7 @@
 #include "KernelUtils.cuh"
 
 namespace cuSGA {
-    __host__ SequenceGraph::SequenceGraph(const ::std::string& pangenomeGraphFileName, const ::std::string& sequenceFileName, ::std::string const (& connectedComponentsFileNames)[NUM_BASES], bool ownsInstance, SequenceGraph* __restrict__ pinned_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) : SequenceGraph{PangenomeGraph{}, PackedDNASequence{}, {0}, {nullptr}, {nullptr}, {nullptr}, {0}, DoubleBuffer<cost_t>{}, 0, nullptr, ownsInstance, pinned_instanceOptional} {
+    __host__ SequenceGraph::SequenceGraph(const ::std::string& pangenomeGraphFileName, const ::std::string& sequenceFileName, ::std::string const (& connectedComponentsFileNames)[NUM_BASES], bool ownsInstance, SequenceGraph* __restrict__ pinned_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) : SequenceGraph{PangenomeGraph{}, PackedDNASequence{}, {0}, {nullptr}, {nullptr}, {nullptr}, {nullptr}, {0}, DoubleBuffer<cost_t>{}, 0, nullptr, ownsInstance, pinned_instanceOptional} {
         // Get allocator
         KernelUtils::BumpPtrAllocator* allocator{allocatorOptional};
         KernelUtils::BumpPtrAllocator allocatorInstance{};
@@ -81,6 +81,7 @@ namespace cuSGA {
         this->sequence = PackedDNASequence{sequenceFileName, false, &pinned_instance->sequence, allocator};
         const auto connectedComponentsOffsetsBase{allocator->emplaceReserve<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsOffsets[0])>>>(totalNumConnectedComponents + NUM_BASES)};
         const auto connectedComponentsMappingsBase{allocator->emplaceReserve<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsMappings[0])>>>(NUM_BASES * numNodes)};
+        const auto connectedComponentsReverseMappingsBase{allocator->emplaceReserve<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsReverseMappings[0])>>>(NUM_BASES * numNodes)};
         const auto connectedComponentsLocalIndexMappingsBase{allocator->emplaceReserve<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsLocalIndexMappings[0])>>>(NUM_BASES * numNodes)};
         connectedComponentSize_t connectedComponentsCounter{0};
 #pragma unroll
@@ -118,6 +119,17 @@ namespace cuSGA {
             }
             this->connectedComponentsMappings[baseIdx] = connectedComponentsMappings;
             this->connectedComponentsLocalIndexMappings[baseIdx] = connectedComponentsLocalIndexMappings;
+
+            // Read connected components reverse mappings from file
+            const auto connectedComponentsReverseMappings{connectedComponentsReverseMappingsBase + baseIdx * numNodes};
+            for (nodeSize_t nodeIdx{0}; nodeIdx < numNodes; ++nodeIdx) {
+                connectedComponentSize_t connectedComponentReverseMapping{0};
+                if (!(connectedComponentsFile >> connectedComponentReverseMapping)) {
+                    throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", connectedComponentsFileNames[baseIdx])};
+                }
+                connectedComponentsReverseMappings[nodeIdx] = connectedComponentReverseMapping;
+            }
+            this->connectedComponentsReverseMappings[baseIdx] = connectedComponentsReverseMappings;
 
             // Find max connected component size for this base
             connectedComponentSize_t maxConnectedComponentsSize{0};
@@ -186,15 +198,18 @@ namespace cuSGA {
         const auto d_pangenomeGraph{pangenomeGraph.copyToDevice(&d_instance->pangenomeGraph, allocator)};
         const auto d_connectedComponentsOffsetsBase{allocator->cudaEmplaceCopy<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsOffsets[0])>>>(connectedComponentsOffsets[0], ::cudaMemcpyHostToDevice, totalNumConnectedComponents + NUM_BASES, false, cudaStreamDefault)};
         const auto d_connectedComponentsMappingsBase{allocator->cudaEmplaceCopy<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsMappings[0])>>>(connectedComponentsMappings[0], ::cudaMemcpyHostToDevice, NUM_BASES * pangenomeGraph.getNumNodes(), false, cudaStreamDefault)};
+        const auto d_connectedComponentsReverseMappingsBase{allocator->cudaEmplaceCopy<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsReverseMappings[0])>>>(connectedComponentsReverseMappings[0], ::cudaMemcpyHostToDevice, NUM_BASES * pangenomeGraph.getNumNodes(), false, cudaStreamDefault)};
         const auto d_connectedComponentsLocalIndexMappingsBase{allocator->cudaEmplaceCopy<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsLocalIndexMappings[0])>>>(connectedComponentsLocalIndexMappings[0], ::cudaMemcpyHostToDevice, NUM_BASES * pangenomeGraph.getNumNodes(), false, cudaStreamDefault)};
         nodeSize_t* d_connectedComponentsOffsets[NUM_BASES]{nullptr};
         nodeSize_t* d_connectedComponentsMappings[NUM_BASES]{nullptr};
+        connectedComponentSize_t* d_connectedComponentsReverseMappings[NUM_BASES]{nullptr};
         connectedComponentSize_t* d_connectedComponentsLocalIndexMappings[NUM_BASES]{nullptr};
         connectedComponentSize_t connectedComponentsCounter{0};
 #pragma unroll
         for (DNABase_t baseIdx{0}; baseIdx < NUM_BASES; ++baseIdx) {
             d_connectedComponentsOffsets[baseIdx] = d_connectedComponentsOffsetsBase + connectedComponentsCounter;
             d_connectedComponentsMappings[baseIdx] = d_connectedComponentsMappingsBase + baseIdx * pangenomeGraph.getNumNodes();
+            d_connectedComponentsReverseMappings[baseIdx] = d_connectedComponentsReverseMappingsBase + baseIdx * pangenomeGraph.getNumNodes();
             d_connectedComponentsLocalIndexMappings[baseIdx] = d_connectedComponentsLocalIndexMappingsBase + baseIdx * pangenomeGraph.getNumNodes();
             connectedComponentsCounter += (numConnectedComponents[baseIdx] + 1);
         }
@@ -202,7 +217,7 @@ namespace cuSGA {
         const auto d_scores{allocator->cudaEmplaceCopy<::std::remove_pointer_t<decltype(scores)>>(scores, ::cudaMemcpyHostToDevice, numScores, false, cudaStreamDefault)};
 
         // Create temporary host instance holding the device pointers
-        const SequenceGraph d_sequenceGraph{d_pangenomeGraph, sequence, numConnectedComponents, d_connectedComponentsOffsets, d_connectedComponentsMappings, d_connectedComponentsLocalIndexMappings, maxConnectedComponentsSizes, d_costsDoubleBuffer, numScores, d_scores, ownsInstance, pinned_instance, d_instance};
+        const SequenceGraph d_sequenceGraph{d_pangenomeGraph, sequence, numConnectedComponents, d_connectedComponentsOffsets, d_connectedComponentsMappings, d_connectedComponentsReverseMappings, d_connectedComponentsLocalIndexMappings, maxConnectedComponentsSizes, d_costsDoubleBuffer, numScores, d_scores, ownsInstance, pinned_instance, d_instance};
 
         // Emplace instance
         if (ownsInstance) {
@@ -253,7 +268,15 @@ namespace cuSGA {
 
         // Allocate additional device buffers
         nodeSize_t* d_buffers{nullptr};
-        CUDA_CHECK(cudaMallocAsync(&d_buffers, DoubleBuffer<nodeSize_t>::NUM_DOUBLE_BUFFERS * pangenomeGraph.getNumNodes() * sizeof(nodeSize_t), cudaStreamDefault));
+        CUDA_CHECK(::cudaMallocAsync(&d_buffers, DoubleBuffer<nodeSize_t>::NUM_DOUBLE_BUFFERS * pangenomeGraph.getNumNodes() * sizeof(nodeSize_t), cudaStreamDefault));
+        connectedComponentSize_t maxNumConnectedComponents{0};
+#pragma unroll
+        for (DNABase_t baseIdx{0}; baseIdx < NUM_BASES; ++baseIdx) {
+            maxNumConnectedComponents = ::std::max(maxNumConnectedComponents, numConnectedComponents[baseIdx]);
+        }
+        bool* d_needsVisiting{nullptr};
+        CUDA_CHECK(::cudaMallocAsync(&d_needsVisiting, maxNumConnectedComponents * sizeof(bool), cudaStreamDefault));
+        CUDA_CHECK(::cudaMemsetAsync(d_needsVisiting, 0, maxNumConnectedComponents * sizeof(bool), cudaStreamDefault));
 
         // Loop over all sequences in the input file
         scoreSize_t scoreIdx{0};
@@ -275,12 +298,12 @@ namespace cuSGA {
                 deletions();
 
                 // Perform substitutions for the given layer
-                substitutions(layerIdx);
+                substitutions(layerIdx, d_needsVisiting);
 
                 // Skip insertions and propagations for the last layer
                 if (layerIdx < sequence.getNumBases() - 1) {
                     // Perform insertions and propagations for the given layer
-                    insertionsAndPropagations(layerIdx, d_buffers);
+                    insertionsAndPropagations(layerIdx, d_buffers, d_needsVisiting);
 
                     // Swap costs double buffer for the next layer
                     pinned_instance->costsDoubleBuffer.swap();
@@ -301,7 +324,8 @@ namespace cuSGA {
         const auto scores{h2d_getScores()};
 
         // Free additional device buffers
-        cudaFreeAsync(d_buffers, cudaStreamDefault);
+        ::cudaFreeAsync(d_buffers, cudaStreamDefault);
+        ::cudaFreeAsync(d_needsVisiting, cudaStreamDefault);
 
         return scores;
     }
@@ -323,7 +347,7 @@ namespace cuSGA {
         d_currentCosts[nodeIdx] = initialNodeCost;
     }
 
-    __global__ void SequenceGraphKernels::substitutions(const edgeSize_t* __restrict__ const d_neighborOffsets, const nodeSize_t* __restrict__ const d_neighborValues, const sequencePack_t* __restrict__ const d_baseValues, const cost_t* __restrict__ const d_previousCosts, cost_t* __restrict__ const d_currentCosts, const nodeSize_t numNodes, const DNABase sequenceBase) {
+    __global__ void SequenceGraphKernels::substitutions(const edgeSize_t* __restrict__ const d_neighborOffsets, const nodeSize_t* __restrict__ const d_neighborValues, const sequencePack_t* __restrict__ const d_baseValues, const cost_t* __restrict__ const d_previousCosts, cost_t* __restrict__ const d_currentCosts, bool* __restrict__ const d_needsVisiting, const connectedComponentSize_t* __restrict__ const connectedComponentsReverseMapping , const nodeSize_t numNodes, const DNABase sequenceBase) {
         // Get thread node index and check for thread overflow
         const auto nodeIdx{::blockIdx.x * ::blockDim.x + ::threadIdx.x};
         if (nodeIdx >= numNodes) {
@@ -348,7 +372,10 @@ namespace cuSGA {
 
             // Set cost to atomic min
             // NOTE: Because in-degree for a node should be low, we can avoid doing warp / block level reduction in order to reduce overhead
-            ::atomicMin(d_currentCosts + neighborIdx, updatedCurrentLayerNeighborCost);
+            if (const auto previousCurrentLayerNeighborCost{::atomicMin(d_currentCosts + neighborIdx, updatedCurrentLayerNeighborCost)}; updatedCurrentLayerNeighborCost < previousCurrentLayerNeighborCost) {
+                const auto connectedComponentNeighborIdx{connectedComponentsReverseMapping[neighborIdx]};
+                d_needsVisiting[connectedComponentNeighborIdx] = true;
+            }
         }
     }
 
@@ -370,7 +397,7 @@ namespace cuSGA {
         d_currentCosts[nodeIdx] = currentLayerNodeCost;
     }
 
-    __global__ void SequenceGraphKernels::insertionsAndPropagations(const edgeSize_t* __restrict__ const d_neighborOffsets, const nodeSize_t* __restrict__ const d_neighborValues, const nodeSize_t* __restrict__ const d_connectedComponentOffsets, const nodeSize_t* __restrict__ const d_connectedComponentMappings, const connectedComponentSize_t* __restrict__ const d_connectedComponentLocalIndexMappings, cost_t* __restrict__ const d_currentCosts, nodeSize_t* __restrict__ const d_buffers, const DNABase sequenceBase, const targetSize_t numWarpsPerBlock, const connectedComponentSize_t numConnectedComponents, const connectedComponentSize_t maxConnectedComponentSize) {
+    __global__ void SequenceGraphKernels::insertionsAndPropagations(const edgeSize_t* __restrict__ const d_neighborOffsets, const nodeSize_t* __restrict__ const d_neighborValues, const nodeSize_t* __restrict__ const d_connectedComponentOffsets, const nodeSize_t* __restrict__ const d_connectedComponentMappings, const connectedComponentSize_t* __restrict__ const d_connectedComponentLocalIndexMappings, cost_t* __restrict__ const d_currentCosts, nodeSize_t* __restrict__ const d_buffers, bool* __restrict__ const d_needsVisiting, const targetSize_t numWarpsPerBlock, const connectedComponentSize_t numConnectedComponents, const connectedComponentSize_t maxConnectedComponentSize) {
         // Shared memory, partitioned in the following way to guarantee alignment without wasting any space:
         //      |  buffers (nodeSize_t)  |  isInQueue (bool)  |
         extern __shared__ nodeSize_t shared_buffers[];
@@ -379,6 +406,11 @@ namespace cuSGA {
         // Get thread warp ID and check for thread overflow
         const auto warpID{(::blockIdx.x * ::blockDim.x + ::threadIdx.x) >> KernelUtils::WARP_SHIFT};
         if (warpID >= numConnectedComponents) {
+            return;
+        }
+
+        // Check if connected component needs visiting
+        if (const auto needsVisiting{d_needsVisiting[warpID]}; !needsVisiting) {
             return;
         }
 
@@ -405,6 +437,11 @@ namespace cuSGA {
         // Get lane index
         const auto laneIdx{::threadIdx.x & (KernelUtils::WARP_SIZE - 1)};
 
+        // Clear needs visiting flag
+        if (laneIdx == 0) {
+            d_needsVisiting[warpID] = false;
+        }
+
         // Perform insertions
         // Visit all neighbors of nodes in the current connected component (using stride access)
         for (auto connectedComponentIdx{connectedComponentStart + laneIdx}; connectedComponentIdx < connectedComponentEnd; connectedComponentIdx += KernelUtils::WARP_SIZE) {
@@ -412,8 +449,12 @@ namespace cuSGA {
             const auto nodeIdx{d_connectedComponentMappings[connectedComponentIdx]};
 
             // Process node
-            processNode(nodeIdx, &warpFrontier, &shared_frontier, d_neighborOffsets, d_neighborValues, d_connectedComponentLocalIndexMappings, d_currentCosts, sequenceBase, laneIdx);
+            processNode(nodeIdx, &warpFrontier, &shared_frontier, d_neighborOffsets, d_neighborValues, d_connectedComponentLocalIndexMappings, d_currentCosts);
         }
+
+        // Sync frontier sizes
+        shared_frontier.setQueueSize(::__shfl_sync(KernelUtils::BROADCAST_SHUFFLE_MASK, shared_frontier.getQueueSize(), 0));
+        warpFrontier.setQueueSize(::__shfl_sync(KernelUtils::BROADCAST_SHUFFLE_MASK, warpFrontier.getQueueSize(), 0));
 
         // Swap frontier
         shared_frontier.swap();
@@ -435,8 +476,12 @@ namespace cuSGA {
                 const auto nodeIdx{sharedFrontierValues[frontierIdx]};
 
                 // Process node
-                processNode(nodeIdx, &warpFrontier, &shared_frontier, d_neighborOffsets, d_neighborValues, d_connectedComponentLocalIndexMappings, d_currentCosts, sequenceBase, laneIdx);
+                processNode(nodeIdx, &warpFrontier, &shared_frontier, d_neighborOffsets, d_neighborValues, d_connectedComponentLocalIndexMappings, d_currentCosts);
             }
+
+            // Sync frontier sizes
+            shared_frontier.setQueueSize(::__shfl_sync(KernelUtils::BROADCAST_SHUFFLE_MASK, shared_frontier.getQueueSize(), 0));
+            warpFrontier.setQueueSize(::__shfl_sync(KernelUtils::BROADCAST_SHUFFLE_MASK, warpFrontier.getQueueSize(), 0));
 
             // Visit all neighbors of nodes in the current global frontier (using stride access)
             const auto warpFrontierSize{warpFrontier.getSize()};
@@ -446,8 +491,12 @@ namespace cuSGA {
                 const auto nodeIdx{warpFrontierValues[frontierIdx]};
 
                 // Process node
-                processNode(nodeIdx, &warpFrontier, &shared_frontier, d_neighborOffsets, d_neighborValues, d_connectedComponentLocalIndexMappings, d_currentCosts, sequenceBase, laneIdx);
+                processNode(nodeIdx, &warpFrontier, &shared_frontier, d_neighborOffsets, d_neighborValues, d_connectedComponentLocalIndexMappings, d_currentCosts);
             }
+
+            // Sync frontier sizes
+            shared_frontier.setQueueSize(::__shfl_sync(KernelUtils::BROADCAST_SHUFFLE_MASK, shared_frontier.getQueueSize(), 0));
+            warpFrontier.setQueueSize(::__shfl_sync(KernelUtils::BROADCAST_SHUFFLE_MASK, warpFrontier.getQueueSize(), 0));
 
             // Swap frontier
             shared_frontier.swap();
