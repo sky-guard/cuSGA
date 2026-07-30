@@ -350,12 +350,13 @@ namespace cuSGA {
 
         // Allocate additional device buffers
         nodeSize_t* d_frontierBufferSize1{nullptr};
-        CUDA_CHECK(::cudaMallocAsync(&d_frontierBufferSize1, (2 + DoubleBuffer<nodeSize_t>::NUM_DOUBLE_BUFFERS * pangenomeGraph.getNumNodes()) * sizeof(nodeSize_t) + pangenomeGraph.getNumNodes() * sizeof(int), cudaStreamDefault));
+        CUDA_CHECK(::cudaMallocAsync(&d_frontierBufferSize1, (2 + DoubleBuffer<nodeSize_t>::NUM_DOUBLE_BUFFERS * pangenomeGraph.getNumNodes()) * sizeof(nodeSize_t) + 2 * pangenomeGraph.getNumNodes() * sizeof(int), cudaStreamDefault));
         const auto d_frontierBufferSize2{d_frontierBufferSize1 + 1};
         const auto d_frontierBuffer1{d_frontierBufferSize2 + 1};
         const auto d_frontierBuffer2{d_frontierBuffer1 + pangenomeGraph.getNumNodes()};
-        const auto d_frontierQueue{reinterpret_cast<int*>(d_frontierBuffer2 + pangenomeGraph.getNumNodes())};
-        CUDA_CHECK(::cudaMemsetAsync(d_frontierQueue, 0, pangenomeGraph.getNumNodes() * sizeof(int), cudaStreamDefault));
+        const auto d_frontierQueue1{reinterpret_cast<int*>(d_frontierBuffer2 + pangenomeGraph.getNumNodes())};
+        const auto d_frontierQueue2{reinterpret_cast<int*>(d_frontierBuffer2 + pangenomeGraph.getNumNodes())};
+        CUDA_CHECK(::cudaMemsetAsync(d_frontierQueue1, 0, 2 * pangenomeGraph.getNumNodes() * sizeof(int), cudaStreamDefault));
 
         // Loop over all sequences in the input file
         scoreSize_t scoreIdx{0};
@@ -378,10 +379,10 @@ namespace cuSGA {
                 deletions();
 
                 // Perform substitutions for the given layer
-                cooperativeSubstitutions(layerIdx, d_frontierBufferSize1, d_frontierBuffer1, d_frontierQueue);
+                cooperativeSubstitutions(layerIdx, d_frontierBufferSize1, d_frontierBuffer1, d_frontierQueue1);
 
                 // Perform insertions and propagations for the given layer (early return if last layer)
-                cooperativeInsertionsAndPropagations(layerIdx, d_frontierBuffer1, d_frontierBuffer2, d_frontierQueue, d_frontierBufferSize1, d_frontierBufferSize2);
+                cooperativeInsertionsAndPropagations(layerIdx, d_frontierBuffer1, d_frontierBuffer2, d_frontierQueue1, d_frontierQueue2, d_frontierBufferSize1, d_frontierBufferSize2);
 
                 // Swap costs double buffer for the next layer (unless last layer)
                 if (layerIdx < sequence.getNumBases() - 1) {
@@ -619,7 +620,7 @@ namespace cuSGA {
         }
     }
 
-    __global__ void SequenceGraphKernels::cooperativeInsertionsAndPropagations(const edgeSize_t* __restrict__ const d_neighborOffsets, const nodeSize_t* __restrict__ const d_neighborValues, cost_t* __restrict__ const d_currentCosts, nodeSize_t* __restrict__ const d_frontierBuffer1, nodeSize_t* __restrict__ const d_frontierBuffer2, int* __restrict__ const d_frontierQueue, nodeSize_t* __restrict__ const d_frontierBufferSize1, nodeSize_t* __restrict__ const d_frontierBufferSize2, const bool earlyExit) {
+    __global__ void SequenceGraphKernels::cooperativeInsertionsAndPropagations(const edgeSize_t* __restrict__ const d_neighborOffsets, const nodeSize_t* __restrict__ const d_neighborValues, cost_t* __restrict__ const d_currentCosts, nodeSize_t* __restrict__ const d_frontierBuffer1, nodeSize_t* __restrict__ const d_frontierBuffer2, int* __restrict__ const d_frontierQueue1, int* __restrict__ const d_frontierQueue2, nodeSize_t* __restrict__ const d_frontierBufferSize1, nodeSize_t* __restrict__ const d_frontierBufferSize2, const bool earlyExit) {
         // Get grid handler
         const auto grid{::cooperative_groups::this_grid()};
 
@@ -637,13 +638,17 @@ namespace cuSGA {
             }
 
             // Get frontier buffer
-            const auto frontierBuffer{(selector)? d_frontierBuffer1 : d_frontierBuffer2};
+            const auto* __restrict__ const frontierBuffer{(selector)? d_frontierBuffer1 : d_frontierBuffer2};
 
             // Get queue buffer
-            const auto queueBuffer{(selector)? d_frontierBuffer2 : d_frontierBuffer1};
+            auto* __restrict__ const queueBuffer{(selector)? d_frontierBuffer2 : d_frontierBuffer1};
+
+            // Get current and next queue masks
+            auto* __restrict__ const currentQueueMask{(selector)? d_frontierQueue1 : d_frontierQueue2};
+            auto* __restrict__ const nextQueueMask{(selector)? d_frontierQueue2 : d_frontierQueue1};
 
             // Get queue size pointer
-            auto* const d_queueSize{(selector)? d_frontierBufferSize2 : d_frontierBufferSize1};
+            auto* __restrict__ const queueSize{(selector)? d_frontierBufferSize2 : d_frontierBufferSize1};
 
             // Get thread ID
             const auto threadID{::blockIdx.x * ::blockDim.x + ::threadIdx.x};
@@ -655,7 +660,7 @@ namespace cuSGA {
                 const auto nodeIdx{frontierBuffer[frontierIdx]};
 
                 // Clear node from the queue
-                d_frontierQueue[nodeIdx] = false;
+                currentQueueMask[nodeIdx] = false;
 
                 // Skip rest of operations if early exit is set to true
                 if (earlyExit) {
@@ -673,7 +678,7 @@ namespace cuSGA {
                     const auto neighborIdx{d_neighborValues[neighborOffset]};
 
                     // Set cost to atomic min and get previous current layer neighbor cost and check for improvement
-                    if (const auto previousCurrentLayerNeighborCost{::atomicMin(d_currentCosts + neighborIdx, updatedCurrentLayerNeighborCost)}; (updatedCurrentLayerNeighborCost < previousCurrentLayerNeighborCost) && (!::atomicExch(d_frontierQueue + neighborIdx, 1))) {
+                    if (const auto previousCurrentLayerNeighborCost{::atomicMin(d_currentCosts + neighborIdx, updatedCurrentLayerNeighborCost)}; (updatedCurrentLayerNeighborCost < previousCurrentLayerNeighborCost) && (!::atomicExch(nextQueueMask + neighborIdx, 1))) {
                         // Get active threads
                         const auto active{::cooperative_groups::coalesced_threads()};
 
@@ -682,7 +687,7 @@ namespace cuSGA {
 
                         // Leader thread reserves space for all threads in the warp
                         if (active.thread_rank() == 0) {
-                            insertionBase = ::atomicAdd(d_queueSize, active.size());
+                            insertionBase = ::atomicAdd(queueSize, active.size());
                         }
 
                         // Shuffle insertion base
@@ -690,7 +695,6 @@ namespace cuSGA {
 
                         // Insert in queue
                         queueBuffer[insertionBase + active.thread_rank()] = neighborIdx;
-                        d_frontierQueue[neighborIdx] = true;
                     }
                 }
             }

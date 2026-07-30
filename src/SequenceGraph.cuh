@@ -39,7 +39,7 @@ namespace cuSGA {
         __device__ __forceinline__ void processNeighbor(Frontier* __restrict__ warpFrontier, Frontier* __restrict__ shared_frontier, cost_t* __restrict__ d_currentCosts, nodeSize_t neighborIdx, nodeSize_t neighborLocalIdx, cost_t updatedCurrentLayerNeighborCost);
         __device__ __forceinline__ void processNode(nodeSize_t nodeIdx, Frontier* __restrict__ warpFrontier, Frontier* __restrict__ shared_frontier, const edgeSize_t* __restrict__ d_neighborOffsets, const nodeSize_t* __restrict__ d_neighborValues, const connectedComponentSize_t* __restrict__ d_connectedComponentLocalIndexMappings, cost_t* __restrict__ d_currentCosts);
         __global__ void insertionsAndPropagations(const edgeSize_t* __restrict__ d_neighborOffsets, const nodeSize_t* __restrict__ d_neighborValues, const nodeSize_t* __restrict__ d_connectedComponentOffsets, const nodeSize_t* __restrict__ d_connectedComponentMappings, const connectedComponentSize_t* __restrict__ d_connectedComponentLocalIndexMappings, cost_t* __restrict__ d_currentCosts, nodeSize_t* __restrict__ d_buffers, bool* __restrict__ d_needsVisiting, targetSize_t numWarpsPerBlock, connectedComponentSize_t numConnectedComponents, connectedComponentSize_t maxConnectedComponentSize, bool earlyExit);
-        __global__ void cooperativeInsertionsAndPropagations(const edgeSize_t* __restrict__ d_neighborOffsets, const nodeSize_t* __restrict__ d_neighborValues, cost_t* __restrict__ d_currentCosts, nodeSize_t* __restrict__ d_frontierBuffer1, nodeSize_t* __restrict__ d_frontierBuffer2, int* __restrict__ d_frontierQueue, nodeSize_t* __restrict__ d_frontierBufferSize1, nodeSize_t* __restrict__ d_frontierBufferSize2, bool earlyExit);
+        __global__ void cooperativeInsertionsAndPropagations(const edgeSize_t* __restrict__ d_neighborOffsets, const nodeSize_t* __restrict__ d_neighborValues, cost_t* __restrict__ d_currentCosts, nodeSize_t* __restrict__ d_frontierBuffer1, nodeSize_t* __restrict__ d_frontierBuffer2, int* __restrict__ d_frontierQueue1, int* __restrict__ d_frontierQueue2, nodeSize_t* __restrict__ d_frontierBufferSize1, nodeSize_t* __restrict__ d_frontierBufferSize2, bool earlyExit);
 
         // Minimum cost kernel
         __global__ void minCost(const cost_t* __restrict__ d_currentCosts, cost_t* __restrict__ d_scores, nodeSize_t numNodes, scoreSize_t scoreIdx);
@@ -355,7 +355,7 @@ namespace cuSGA {
         }
 
         // Launch cooperative insertions and propagations kernel
-        __host__ __forceinline__ void cooperativeInsertionsAndPropagations(const sequenceSize_t layerIdx, const nodeSize_t* __restrict__ d_frontierBuffer1, const nodeSize_t* __restrict__ d_frontierBuffer2, const int* __restrict__ d_frontierQueue, const nodeSize_t* __restrict__ d_frontierBufferSize1, const nodeSize_t* __restrict__ d_frontierBufferSize2) const {
+        __host__ __forceinline__ void cooperativeInsertionsAndPropagations(const sequenceSize_t layerIdx, const nodeSize_t* __restrict__ const d_frontierBuffer1, const nodeSize_t* __restrict__ const d_frontierBuffer2, const int* __restrict__ const d_frontierQueue1, const int* __restrict__ const d_frontierQueue2, const nodeSize_t* __restrict__ const d_frontierBufferSize1, const nodeSize_t* __restrict__ const d_frontierBufferSize2) const {
             // Cached grid and block sizes
             static int cachedGridSizes[NUM_BASES]{};
             static int cachedBlockSizes[NUM_BASES]{};
@@ -379,7 +379,7 @@ namespace cuSGA {
             const auto gridSize{cachedGridSizes[static_cast<DNABase_t>(sequenceBase)]};
 
             // Launch kernel
-            KernelUtils::cudaLaunchCooperativeKernel<SequenceGraphKernels::cooperativeInsertionsAndPropagations>(gridSize, blockSize, 0, cudaStreamDefault, pinned_instance->pangenomeGraph.getNeighborOffsets(), pinned_instance->pangenomeGraph.getNeighborValues(), pinned_instance->costsDoubleBuffer.current(), d_frontierBuffer1, d_frontierBuffer2, d_frontierQueue, d_frontierBufferSize1, d_frontierBufferSize2, layerIdx == sequence.getNumBases() - 1);
+            KernelUtils::cudaLaunchCooperativeKernel<SequenceGraphKernels::cooperativeInsertionsAndPropagations>(gridSize, blockSize, 0, cudaStreamDefault, pinned_instance->pangenomeGraph.getNeighborOffsets(), pinned_instance->pangenomeGraph.getNeighborValues(), pinned_instance->costsDoubleBuffer.current(), d_frontierBuffer1, d_frontierBuffer2, d_frontierQueue1, d_frontierQueue2, d_frontierBufferSize1, d_frontierBufferSize2, layerIdx == sequence.getNumBases() - 1);
         }
 
         // Launch min cost kernel
