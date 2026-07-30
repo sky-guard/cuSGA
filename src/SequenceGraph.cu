@@ -248,7 +248,7 @@ namespace cuSGA {
         }
     }
 
-    __host__ cost_t* SequenceGraph::align(const ::std::string& sequenceFileName) {
+    __host__ cost_t* SequenceGraph::connectedComponentsAlign(const ::std::string& sequenceFileName) {
         // Open file
         ::std::ifstream sequenceFile{sequenceFileName};
         if (!sequenceFile.is_open()) {
@@ -267,13 +267,13 @@ namespace cuSGA {
         copyToDevice();
 
         // Allocate additional device buffers
-        nodeSize_t* d_buffers{nullptr};
-        CUDA_CHECK(::cudaMallocAsync(&d_buffers, DoubleBuffer<nodeSize_t>::NUM_DOUBLE_BUFFERS * pangenomeGraph.getNumNodes() * sizeof(nodeSize_t), cudaStreamDefault));
         connectedComponentSize_t maxNumConnectedComponents{0};
 #pragma unroll
         for (DNABase_t baseIdx{0}; baseIdx < NUM_BASES; ++baseIdx) {
             maxNumConnectedComponents = ::std::max(maxNumConnectedComponents, numConnectedComponents[baseIdx]);
         }
+        nodeSize_t* d_buffers{nullptr};
+        CUDA_CHECK(::cudaMallocAsync(&d_buffers, DoubleBuffer<nodeSize_t>::NUM_DOUBLE_BUFFERS * pangenomeGraph.getNumNodes() * sizeof(nodeSize_t), cudaStreamDefault));
         bool* d_needsVisiting{nullptr};
         CUDA_CHECK(::cudaMallocAsync(&d_needsVisiting, maxNumConnectedComponents * sizeof(bool), cudaStreamDefault));
         CUDA_CHECK(::cudaMemsetAsync(d_needsVisiting, 0, maxNumConnectedComponents * sizeof(bool), cudaStreamDefault));
@@ -293,19 +293,19 @@ namespace cuSGA {
             pinned_instance->costsDoubleBuffer.swap();
 
             // Solve alignment layer by layer
-            for (sequenceSize_t layerIdx{1}; layerIdx < sequence.getNumBases(); ++layerIdx) {
+            const auto numBases{sequence.getNumBases()};
+            for (sequenceSize_t layerIdx{1}; layerIdx < numBases; ++layerIdx) {
                 // Perform deletions for the given layer
                 deletions();
 
                 // Perform substitutions for the given layer
                 substitutions(layerIdx, d_needsVisiting);
 
-                // Skip insertions and propagations for the last layer
-                if (layerIdx < sequence.getNumBases() - 1) {
-                    // Perform insertions and propagations for the given layer
-                    insertionsAndPropagations(layerIdx, d_buffers, d_needsVisiting);
+                // Perform insertions and propagations for the given layer (early return if last layer)
+                insertionsAndPropagations(layerIdx, d_buffers, d_needsVisiting);
 
-                    // Swap costs double buffer for the next layer
+                // Swap costs double buffer for the next layer (unless last layer)
+                if (layerIdx < sequence.getNumBases() - 1) {
                     pinned_instance->costsDoubleBuffer.swap();
                 }
             }
@@ -330,6 +330,84 @@ namespace cuSGA {
         return scores;
     }
 
+    __host__ cost_t* SequenceGraph::gridAlign(const ::std::string& sequenceFileName) {
+        // Open file
+        ::std::ifstream sequenceFile{sequenceFileName};
+        if (!sequenceFile.is_open()) {
+            throw ::std::runtime_error{::std::format("Unable to open file: {}", sequenceFileName)};
+        }
+
+        // Read and skip number of scores and max sequence length
+        if (scoreSize_t numScores{0}; !(sequenceFile >> numScores)) {
+            throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", sequenceFileName)};
+        }
+        if (sequenceSize_t maxSequenceLength{0}; !(sequenceFile >> maxSequenceLength)) {
+            throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", sequenceFileName)};
+        }
+
+        // Copy sequence graph instance to device
+        copyToDevice();
+
+        // Allocate additional device buffers
+        nodeSize_t* d_frontierBufferSize1{nullptr};
+        CUDA_CHECK(::cudaMallocAsync(&d_frontierBufferSize1, (2 + DoubleBuffer<nodeSize_t>::NUM_DOUBLE_BUFFERS * pangenomeGraph.getNumNodes()) * sizeof(nodeSize_t) + pangenomeGraph.getNumNodes() * sizeof(int), cudaStreamDefault));
+        const auto d_frontierBufferSize2{d_frontierBufferSize1 + 1};
+        const auto d_frontierBuffer1{d_frontierBufferSize2 + 1};
+        const auto d_frontierBuffer2{d_frontierBuffer1 + pangenomeGraph.getNumNodes()};
+        const auto d_frontierQueue{reinterpret_cast<int*>(d_frontierBuffer2 + pangenomeGraph.getNumNodes())};
+        CUDA_CHECK(::cudaMemsetAsync(d_frontierQueue, 0, pangenomeGraph.getNumNodes() * sizeof(int), cudaStreamDefault));
+
+        // Loop over all sequences in the input file
+        scoreSize_t scoreIdx{0};
+        while (sequence.readFromFile(sequenceFileName, &sequenceFile)) {
+            // Check for non-empty sequence
+            if (sequence.getNumBases() == 0) {
+                throw ::std::runtime_error{"Unable to align an empty sequence!"};
+            }
+
+            // Perform initialization step
+            initialize();
+
+            // Swap costs double buffer for the next layer
+            pinned_instance->costsDoubleBuffer.swap();
+
+            // Solve alignment layer by layer
+            const auto numBases{sequence.getNumBases()};
+            for (sequenceSize_t layerIdx{1}; layerIdx < numBases; ++layerIdx) {
+                // Perform deletions for the given layer
+                deletions();
+
+                // Perform substitutions for the given layer
+                cooperativeSubstitutions(layerIdx, d_frontierBufferSize1, d_frontierBuffer1, d_frontierQueue);
+
+                // Perform insertions and propagations for the given layer (early return if last layer)
+                cooperativeInsertionsAndPropagations(layerIdx, d_frontierBuffer1, d_frontierBuffer2, d_frontierQueue, d_frontierBufferSize1, d_frontierBufferSize2);
+
+                // Swap costs double buffer for the next layer (unless last layer)
+                if (layerIdx < sequence.getNumBases() - 1) {
+                    pinned_instance->costsDoubleBuffer.swap();
+                }
+            }
+
+            // Compute minimum cost
+            minCost(scoreIdx);
+
+            // Move to the next score
+            ++scoreIdx;
+        }
+
+        // Close file
+        sequenceFile.close();
+
+        // Copy over scores from device
+        const auto scores{h2d_getScores()};
+
+        // Free additional device buffers
+        ::cudaFreeAsync(d_frontierBufferSize1, cudaStreamDefault);
+
+        return scores;
+    }
+
     __global__ void SequenceGraphKernels::initialize(const sequencePack_t* __restrict__ const d_baseValues, cost_t* __restrict__ const d_currentCosts, const nodeSize_t numNodes, const DNABase initialSequenceBase) {
         // Get thread node index and check for thread overflow
         const auto nodeIdx{::blockIdx.x * ::blockDim.x + ::threadIdx.x};
@@ -347,7 +425,7 @@ namespace cuSGA {
         d_currentCosts[nodeIdx] = initialNodeCost;
     }
 
-    __global__ void SequenceGraphKernels::substitutions(const edgeSize_t* __restrict__ const d_neighborOffsets, const nodeSize_t* __restrict__ const d_neighborValues, const sequencePack_t* __restrict__ const d_baseValues, const cost_t* __restrict__ const d_previousCosts, cost_t* __restrict__ const d_currentCosts, bool* __restrict__ const d_needsVisiting, const connectedComponentSize_t* __restrict__ const connectedComponentsReverseMapping , const nodeSize_t numNodes, const DNABase sequenceBase) {
+    __global__ void SequenceGraphKernels::substitutions(const edgeSize_t* __restrict__ const d_neighborOffsets, const nodeSize_t* __restrict__ const d_neighborValues, const sequencePack_t* __restrict__ const d_baseValues, const cost_t* __restrict__ const d_previousCosts, cost_t* __restrict__ const d_currentCosts, bool* __restrict__ const d_needsVisiting, const connectedComponentSize_t* __restrict__ const connectedComponentsReverseMapping, const nodeSize_t numNodes, const DNABase sequenceBase) {
         // Get thread node index and check for thread overflow
         const auto nodeIdx{::blockIdx.x * ::blockDim.x + ::threadIdx.x};
         if (nodeIdx >= numNodes) {
@@ -379,6 +457,38 @@ namespace cuSGA {
         }
     }
 
+    __global__ void SequenceGraphKernels::cooperativeSubstitutions(const edgeSize_t* __restrict__ const d_neighborOffsets, const nodeSize_t* __restrict__ const d_neighborValues, const sequencePack_t* __restrict__ const d_baseValues, const cost_t* __restrict__ const d_previousCosts, cost_t* __restrict__ const d_currentCosts, nodeSize_t* __restrict__ const d_frontierBufferSize, nodeSize_t* __restrict__ const d_frontierBuffer, int* __restrict__ const d_frontierQueue, const nodeSize_t numNodes, const DNABase sequenceBase) {
+        // Get thread node index and check for thread overflow
+        const auto nodeIdx{::blockIdx.x * ::blockDim.x + ::threadIdx.x};
+        if (nodeIdx >= numNodes) {
+            return;
+        }
+
+        // Get node cost in the previous layer
+        const auto previousLayerNodeCost{d_previousCosts[nodeIdx]};
+
+        // Loop over all neighbors
+        const auto neighborsStart{d_neighborOffsets[nodeIdx]};
+        const auto neighborEnd{d_neighborOffsets[nodeIdx + 1]};
+        for (auto neighborOffset{neighborsStart}; neighborOffset < neighborEnd; ++neighborOffset) {
+            // Get neighbor index
+            const auto neighborIdx{d_neighborValues[neighborOffset]};
+
+            // Get DNA base for the neighbor
+            const auto neighborBase{PackedDNASequence::getBase(d_baseValues, neighborIdx)};
+
+            // Compute updated node cost
+            const auto updatedCurrentLayerNeighborCost{(sequenceBase == neighborBase)? previousLayerNodeCost : (previousLayerNodeCost + SequenceGraph::SUBSTITUTION_COST)};
+
+            // Set cost to atomic min
+            // NOTE: Because in-degree for a node should be low, we can avoid doing warp / block level reduction in order to reduce overhead
+            if (const auto previousCurrentLayerNeighborCost{::atomicMin(d_currentCosts + neighborIdx, updatedCurrentLayerNeighborCost)}; (updatedCurrentLayerNeighborCost < previousCurrentLayerNeighborCost) && (!::atomicExch(d_frontierQueue + neighborIdx, 1))) {
+                const auto previousFrontierSize{::atomicAdd(d_frontierBufferSize, 1)};
+                d_frontierBuffer[previousFrontierSize] = neighborIdx;
+            }
+        }
+    }
+
     __global__ void SequenceGraphKernels::deletions(const cost_t* __restrict__ const d_previousCosts, cost_t* __restrict__ const d_currentCosts, const nodeSize_t numNodes) {
         // Get thread node index and check for thread overflow
         const auto nodeIdx{::blockIdx.x * ::blockDim.x + ::threadIdx.x};
@@ -397,11 +507,11 @@ namespace cuSGA {
         d_currentCosts[nodeIdx] = currentLayerNodeCost;
     }
 
-    __global__ void SequenceGraphKernels::insertionsAndPropagations(const edgeSize_t* __restrict__ const d_neighborOffsets, const nodeSize_t* __restrict__ const d_neighborValues, const nodeSize_t* __restrict__ const d_connectedComponentOffsets, const nodeSize_t* __restrict__ const d_connectedComponentMappings, const connectedComponentSize_t* __restrict__ const d_connectedComponentLocalIndexMappings, cost_t* __restrict__ const d_currentCosts, nodeSize_t* __restrict__ const d_buffers, bool* __restrict__ const d_needsVisiting, const targetSize_t numWarpsPerBlock, const connectedComponentSize_t numConnectedComponents, const connectedComponentSize_t maxConnectedComponentSize) {
+    __global__ void SequenceGraphKernels::insertionsAndPropagations(const edgeSize_t* __restrict__ const d_neighborOffsets, const nodeSize_t* __restrict__ const d_neighborValues, const nodeSize_t* __restrict__ const d_connectedComponentOffsets, const nodeSize_t* __restrict__ const d_connectedComponentMappings, const connectedComponentSize_t* __restrict__ const d_connectedComponentLocalIndexMappings, cost_t* __restrict__ const d_currentCosts, nodeSize_t* __restrict__ const d_buffers, bool* __restrict__ const d_needsVisiting, const targetSize_t numWarpsPerBlock, const connectedComponentSize_t numConnectedComponents, const connectedComponentSize_t maxConnectedComponentSize, const bool earlyExit) {
         // Shared memory, partitioned in the following way to guarantee alignment without wasting any space:
         //      |  buffers (nodeSize_t)  |  isInQueue (bool)  |
         extern __shared__ nodeSize_t shared_buffers[];
-        const auto shared_isInQueue{(shared_buffers + numWarpsPerBlock * (SHARED_FRONTIER_BUFFER_SIZE << 1))};
+        const auto shared_isInQueue{reinterpret_cast<queuePack_t*>(shared_buffers + numWarpsPerBlock * (SHARED_FRONTIER_BUFFER_SIZE << 1))};
 
         // Get thread warp ID and check for thread overflow
         const auto warpID{(::blockIdx.x * ::blockDim.x + ::threadIdx.x) >> KernelUtils::WARP_SHIFT};
@@ -423,16 +533,16 @@ namespace cuSGA {
         // Get warp index
         const auto warpIdx{::threadIdx.x >> KernelUtils::WARP_SHIFT};
 
-        // Get shared frontier
-        const auto shared_buffersBase{shared_buffers + ((warpIdx * SHARED_FRONTIER_BUFFER_SIZE) << 1)};
-        const auto shared_isInQueueBase{shared_isInQueue + warpIdx * packedQueueSize};
-        const DoubleBuffer shared_doubleBuffer{SHARED_FRONTIER_BUFFER_SIZE, shared_buffersBase, shared_buffersBase + SHARED_FRONTIER_BUFFER_SIZE, 0, false};
-        Frontier shared_frontier{0, 0, shared_doubleBuffer, shared_isInQueueBase};
-
         // Get warp frontier
         const auto d_buffersBase{d_buffers + (connectedComponentStart << 1)};
         const DoubleBuffer warpDoubleBuffer{connectedComponentSize, d_buffersBase, d_buffersBase + connectedComponentSize, 0, false};
+        const auto shared_isInQueueBase{shared_isInQueue + warpIdx * packedQueueSize};
         Frontier warpFrontier{0, 0, warpDoubleBuffer, shared_isInQueueBase};
+
+        // Get shared frontier
+        const auto shared_buffersBase{shared_buffers + ((warpIdx * SHARED_FRONTIER_BUFFER_SIZE) << 1)};
+        const DoubleBuffer shared_doubleBuffer{SHARED_FRONTIER_BUFFER_SIZE, shared_buffersBase, shared_buffersBase + SHARED_FRONTIER_BUFFER_SIZE, 0, false};
+        Frontier shared_frontier{0, 0, shared_doubleBuffer, shared_isInQueueBase};
 
         // Get lane index
         const auto laneIdx{::threadIdx.x & (KernelUtils::WARP_SIZE - 1)};
@@ -440,6 +550,11 @@ namespace cuSGA {
         // Clear needs visiting flag
         if (laneIdx == 0) {
             d_needsVisiting[warpID] = false;
+        }
+
+        // Return early if early exit
+        if (earlyExit) {
+            return;
         }
 
         // Perform insertions
@@ -501,6 +616,100 @@ namespace cuSGA {
             // Swap frontier
             shared_frontier.swap();
             warpFrontier.swap();
+        }
+    }
+
+    __global__ void SequenceGraphKernels::cooperativeInsertionsAndPropagations(const edgeSize_t* __restrict__ const d_neighborOffsets, const nodeSize_t* __restrict__ const d_neighborValues, cost_t* __restrict__ const d_currentCosts, nodeSize_t* __restrict__ const d_frontierBuffer1, nodeSize_t* __restrict__ const d_frontierBuffer2, int* __restrict__ const d_frontierQueue, nodeSize_t* __restrict__ const d_frontierBufferSize1, nodeSize_t* __restrict__ const d_frontierBufferSize2, const bool earlyExit) {
+        // Get grid handler
+        const auto grid{::cooperative_groups::this_grid()};
+
+        // Get selector
+        bool selector{true};
+
+        // Loop while frontier not empty
+        while (true) {
+            // Get frontier size
+            const auto frontierSize{(selector)? *d_frontierBufferSize1 : *d_frontierBufferSize2};
+
+            // Check if frontier is empty
+            if (frontierSize == 0) {
+                break;
+            }
+
+            // Get frontier buffer
+            const auto frontierBuffer{(selector)? d_frontierBuffer1 : d_frontierBuffer2};
+
+            // Get queue buffer
+            const auto queueBuffer{(selector)? d_frontierBuffer2 : d_frontierBuffer1};
+
+            // Get queue size pointer
+            auto* const d_queueSize{(selector)? d_frontierBufferSize2 : d_frontierBufferSize1};
+
+            // Get thread ID
+            const auto threadID{::blockIdx.x * ::blockDim.x + ::threadIdx.x};
+
+            // Process all nodes in the frontier (using grid-stride loop)
+            const auto stride{::gridDim.x * ::blockDim.x};
+            for (nodeSize_t frontierIdx{threadID}; frontierIdx < frontierSize; frontierIdx += stride) {
+                // Get node index
+                const auto nodeIdx{frontierBuffer[frontierIdx]};
+
+                // Clear node from the queue
+                d_frontierQueue[nodeIdx] = false;
+
+                // Skip rest of operations if early exit is set to true
+                if (earlyExit) {
+                    continue;
+                }
+
+                // Get updated current layer neighbor cost
+                const auto updatedCurrentLayerNeighborCost{d_currentCosts[nodeIdx] + SequenceGraph::INSERTION_COST};
+
+                // Loop over all neighbors and search for propagations
+                const auto neighborsStart{d_neighborOffsets[nodeIdx]};
+                const auto neighborEnd{d_neighborOffsets[nodeIdx + 1]};
+                for (auto neighborOffset{neighborsStart}; neighborOffset < neighborEnd; ++neighborOffset) {
+                    // Get neighbor index
+                    const auto neighborIdx{d_neighborValues[neighborOffset]};
+
+                    // Set cost to atomic min and get previous current layer neighbor cost and check for improvement
+                    if (const auto previousCurrentLayerNeighborCost{::atomicMin(d_currentCosts + neighborIdx, updatedCurrentLayerNeighborCost)}; (updatedCurrentLayerNeighborCost < previousCurrentLayerNeighborCost) && (!::atomicExch(d_frontierQueue + neighborIdx, 1))) {
+                        // Get active threads
+                        const auto active{::cooperative_groups::coalesced_threads()};
+
+                        // Get insertion base
+                        ::uint8_t insertionBase{0};
+
+                        // Leader thread reserves space for all threads in the warp
+                        if (active.thread_rank() == 0) {
+                            insertionBase = ::atomicAdd(d_queueSize, active.size());
+                        }
+
+                        // Shuffle insertion base
+                        insertionBase = active.shfl(insertionBase, 0);
+
+                        // Insert in queue
+                        queueBuffer[insertionBase + active.thread_rank()] = neighborIdx;
+                        d_frontierQueue[neighborIdx] = true;
+                    }
+                }
+            }
+
+            // Synchronize grid
+            grid.sync();
+
+            // Flush current size
+            if (::cooperative_groups::grid_group::thread_rank() == 0) {
+                if (selector) {
+                    *d_frontierBufferSize1 = 0;
+                }
+                else {
+                    *d_frontierBufferSize2 = 0;
+                }
+            }
+
+            // Swap selector
+            selector = !selector;
         }
     }
 

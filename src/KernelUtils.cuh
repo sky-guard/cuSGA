@@ -60,6 +60,27 @@ namespace cuSGA::KernelUtils {
 #endif
     }
 
+    // Cooperative Kernel helper
+    template <const auto Kernel, typename... Args>
+    __host__ __forceinline__ void cudaLaunchCooperativeKernel(const targetSize_t gridSize, const targetSize_t blockSize, const targetSize_t dynamicSMemSize, const cudaStream_t& stream, Args&&... args) {
+        // Check for empty parameters list
+        if constexpr (sizeof...(Args) == 0) {
+            ::cudaLaunchCooperativeKernel(Kernel, gridSize, blockSize, nullptr, dynamicSMemSize, stream);
+        }
+        else {
+            // Build the argument pointer array dynamically
+            void* kernelArgs[] = {(void*)::std::addressof(args)...}; // NOLINT
+
+            // Launch kernel
+            ::cudaLaunchCooperativeKernel(Kernel, gridSize, blockSize, kernelArgs, dynamicSMemSize, stream);
+        }
+
+#ifndef NDEBUG
+        // Check for launch errors
+        CUDA_CHECK(::cudaGetLastError());
+#endif
+    }
+
     // PTX lanemask instruction helper
     __device__ __forceinline__ unsigned lanemask_lt() {
         unsigned mask;

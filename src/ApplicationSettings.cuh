@@ -27,11 +27,16 @@ namespace cuSGA::ApplicationSettings {
     inline constexpr auto CONNECTED_COMPONENTS_FILE_NAMES_DESCRIPTION{"The paths to the files containing the Connected Components of the Character Graphs for the given Pangenome Graph. The common prefix of the file names is also sufficient and cuSGA will automatically look for files with the following names: $PREFIX-components-{A, C, G, T}."};
     inline constexpr ::std::string CONNECTED_COMPONENTS_FILE_NAME_SUFFIXES[]{"-components-A", "-components-C", "-components-G", "-components-T"};
 
+    // Alignment version
+    inline constexpr auto USE_GRID_ALIGNMENT_FLAG{"--grid-alignment"};
+    inline constexpr auto USE_GRID_ALIGNMENT_FLAG_DESCRIPTION{"The Alignment Algorithm type to use: Connected Components level (DEFAULT) or Grid level (enabled by setting this flag). Connected Components level Alignment is in general more performant, especially for smaller graphs. Grid level Alignment could potentially be better for larger graphs (USE AT OWN RISK)."};
+
     // Parsed arguments struct
     struct ParsedArguments {
         ::std::string sequenceFileName{};
         ::std::string pangenomeGraphFileName{};
         ::std::string connectedComponentsFileNames[NUM_BASES]{};
+        bool useGridAlignment{false};
     };
 
     inline ParsedArguments parseArguments(const int argc, const char* const argv[]) {
@@ -50,6 +55,7 @@ namespace cuSGA::ApplicationSettings {
         // Configure application arguments
         app.add_option(SEQUENCE_FILE_NAME_FLAG, parsedArguments.sequenceFileName, SEQUENCE_FILE_NAME_DESCRIPTION)->required();
         app.add_option(PANGENOME_GRAPH_FILE_NAME_FLAG, parsedArguments.pangenomeGraphFileName, PANGENOME_GRAPH_FILE_NAME_DESCRIPTION)->required();
+        app.add_flag(USE_GRID_ALIGNMENT_FLAG, parsedArguments.useGridAlignment, USE_GRID_ALIGNMENT_FLAG_DESCRIPTION);
         const auto connectedComponentsFileNamesOption{app.add_option(CONNECTED_COMPONENTS_FILE_NAMES_FLAG, connectedComponentsFileNamesVector, CONNECTED_COMPONENTS_FILE_NAMES_DESCRIPTION)->expected(1, NUM_BASES)};
 
         // Parse application arguments

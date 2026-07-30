@@ -35,5 +35,6 @@ set_target_properties(cuSGA PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 
 target_compile_options(cuSGA PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--extended-lambda>)
 target_compile_options(cuSGA PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--ptxas-options=-v>)
+# target_compile_options(cuSGA PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-lineinfo>)
 
 target_link_libraries(cuSGA PRIVATE CLI11::CLI11)

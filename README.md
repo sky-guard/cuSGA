@@ -10,14 +10,14 @@ cuSGA is a CUDA implementation of the ParSGA Algorithm. As such, it implements f
 * Initialization.
 * Deletions.
 * Substitutions.
-* Insertions and Propagations.
+* **Insertions and Propagations.**
 * Minimum Cost.
 
 The first three kernels and the last one map quite nicely to the CUDA Parallel Architecture due to their mostly regular nature, making them quite straightforward and easy to implement. **The fourth kernel, on the other hand, deserves some more attention**, as it was for sure the most challenging one to implement in a performant way and represents the bottleneck of the entire program **(94% - 99% of execution time)**.
 
 A first parallelization attempt was made by implementing a **Global-level Frontier and performing a BFS-like exploration over the entire Graph** to propagate the Insertion improvements across all Nodes, disregarding Connected Components completely. While this worked, it turned out to be **not performant at all**, due to the excessive amount of Data Transfers between Host and Device necessary to handle the Frontier status, as well as the Overhead Cost of launching a new Kernel instance for each level of the BFS. These issues were made evident by the profiling results, collected using NSight Systems and Nsight Compute, and thus demanded an architectural shift in perspective.
 
-Both of these problems stemmed from the fact that **performing an exploration over the entirety of the Graph all at once inherently required some form of Grid-level synchronization, which proved to be too costly to achieve in this case**. **However, thanks to the presence of Connected Components, Grid-level synchronization was in fact not necessary at all: the exploration could instead be carried out across the Nodes of each Connected Component individually, in a completely independent manner**. This turned out to be the key to solving this challenge, as it made possible to run the BFS-like exploration algorithm in its entirety on the GPU all at once, using only a single Kernel launch per layer.
+Both of these problems stemmed from the fact that **performing an exploration over the entirety of the Graph all at once inherently required some form of Grid-level synchronization, which proved to be too costly to achieve in this case**. **However, thanks to the presence of Connected Components, Grid-level synchronization was in fact not necessary at all: the exploration could instead be carried out across the Nodes of each Connected Component individually, in a completely independent manner**. This turned out to be key to solve this challenge, as it made possible to run the BFS-like exploration algorithm in its entirety on the GPU all at once, using only a single Kernel launch per layer.
 
 Thus, **I made the decision to map one Warp per Connected Component and perform the same BFS-like exploration as before, but at a per Connected Component level**. This is because **mapping one Thread per Connected Component would have been too costly** for a few different reasons:
 
@@ -51,15 +51,33 @@ Lastly, a final round of profiling through NSight Systems and NSight Compute sho
 
 * **Device Utilization**.
 
-  ***NOTE**: Not a real problem, read [Performance & Results](#performance--results) for more information.*
+  ***NOTE**: Not a real problem, as this is caused by insufficient input size. Read [Performance & Results](#performance--results) for more information.*
 
 * **SM Occupancy**.
 
-  ***NOTE**: Further testing needs to be done to determine whether this is a real problem or not. NCU reported the actual number of Active Threads being much lower than the expected theoretical limit of around 85% - 90% (caused by a somewhat high Register Usage of 55 Registers per Thread). However, this could partially be caused by the insufficient input size, as stated in [Performance & Results](#performance--results), as well as the number of Insertions that can be propagated at the same time being lower than the size of a Warp. This is, heuristically, to be expected, but could be mitigated by larger Connected Component Sizes.*
+  ***NOTE**: Further testing needs to be done to determine whether this is a real problem or not. NCU reported the actual number of Active Threads being much lower than the expected theoretical limit of around 75% (caused by a somewhat high Register Usage of 58 Registers per Thread). However, this could partially be caused by the insufficient input size, as stated in [Performance & Results](#performance--results), as well as the number of Insertions that can be propagated at the same time being lower than the size of a Warp. This is, heuristically, to be expected, but could be mitigated by larger Connected Component Sizes.*
 
 * **Memory Access Pattern**.
 
   ***NOTE**: As this is part of the nature of the problem itself, not much can be done to improve this. Keeping the Nodes in the Frontier sorted could potentially help.*
+
+One final parallelization attempt was made, this time **going back to the original idea of a Grid level Synchronous exploration**. In fact, the original implementation turned out to be quite lucklaster not exactly because it was a bad idea, but in fact becasue it could have been implemented way better: instead of launching one Kernel per level of the exploration and transferring Frontier data back and forth from Device to Host, **the same idea could have been implemented using Cooperative Groups, thus resolving both of the aformentioned issues**. 
+
+This idea was also sparked by the following realization about the original ParSGA Algorithm: **it is possible to determine at Substitutions time exactly which Nodes / Connected Components will need to be visited in the following Insertions phase**. In fact, **a Node needs to be visited for Insertions / Propagations only if there is a Match at Substitutions time that provides an improvement over the previous cost!** This information can then be used in order to avoid a full scan of the Graph at the start of the Insertions phase to find the initial Frontier.
+
+The same idea also obviously can be applied to the Connected Components level Synchronization version of the Algorithm, although with diminishing returns as opposed to the Grid level Synchronization version, which in fact turned out to be the **most successful parallelization attempt, as well as the most consistent, since it doesn't rely on Connected Components at all.**
+
+Finally, let's review the results and bottlenecks identified by NSight Systems and NSight Compute:
+
+* **Excessive Stalling and Low Active Threads Occupancy**.
+
+  ***NOTE**: This isn't surprising at all and is, in fact, to be expected. Thanks to the aforementioned optimizations, it was possible to efficiently reduce the size of Global Queue to a minimum. This, combined with the fact that we are now using Cooperative Groups to fill SMs as much as possible, means that a very large number of Threads will just either overflow the Global Queue Size or be inactive due to a too small number of Insertions that can be propagated in parallel at any given time. While the first issue should be mitigated by increasing (significantly) the size of the input, the second one is much harder to solve, as it is part of the nature of the problem itself. Another secondary factor that could contribute to this (though not in this case, as the input was quite regular in this regard), is the Variance of the Neighbor Out-Degree. This is because each Thread is mapped to a single Node, and Nodes can have a varying number of Neighbors.*
+
+* **Inability to reach Theoretical Occupancy and Work Imbalance**. 
+
+  ***NOTE**: These issues, although present, are very much minor compared to the first one. This is coherent with the results shown by NCU (around ~20% estimated Speedup VS ~75% estimated Speedup for Stalls). Although Maximum Occupancy in this case is only 75% due to the high Register Usage, the final number was overall still quite good (9 Warps per Scheduler VS 12 Theoretical Maximum). The same can be also said about Work Imbalance (Maximum 45% above average, Minimum 18% below average).*
+
+Some final conclusions and thoughts: **if more testing were to be done, analyzing how many Insertions can be propagated on average in parallel across all the Nodes, and if this number were big enough... then parallelizing this Algorithm on a GPU could be considered worth it. But if instead, this number were quite low... then that would mean that this Problem is mostly Serial in nature and thus attempting to parallelize it on a massively-parallel throughput-focused device is bound to be mostly unsuccessful**.
 
 ---
 
@@ -105,9 +123,14 @@ First, navigate to the build directory (or where your executable is located):
 cd build
 ```
 
-To align a sequence and print the resulting Alignment Scores, please run the following command:
+To align a sequence using **Connected Components level Synchronization** and print the resulting Alignment Scores, please run the following command:
 ```bash
 ./cuSGA -s SEQUENCE_FILE -p PANGENOME_GRAPH_FILE -c CONNECTED_COMPONENTS_FILE_PREFIX
+```
+
+To align a sequence using **Grid level Synchronization with Cooperative Groups** and print the resulting Alignment Scores, please run the following command:
+```bash
+./cuSGA --grid-alignment -s SEQUENCE_FILE -p PANGENOME_GRAPH_FILE -c CONNECTED_COMPONENTS_FILE_PREFIX
 ```
 
 ***NOTE**: For additional information regarding the expected files and their formats, please read [Input File Formats](#input-file-formats).*
@@ -168,22 +191,22 @@ cuSGA expects the following Input Files:
 
 The following results were obtained testing the alignment of 100 Sequences, each one of length ~10k, to the Pangenome Graph of Salmonella, which consists roughly of ~10k nodes / edges, using a variety of Connected Component sizes:
 
-| Implementation | Platform                            | Execution Time | Speedup         | Time Reduction |
-|:---------------|:------------------------------------|:---------------|:----------------|:---------------|
-| **ParSGA**     | OpenMP (Ryzen 9 6900HS, 8 cores)    | 98s            | 1.0x            | 0%             |
-| **cuSGA**      | CUDA (NVIDIA RTX 3080 Mobile)       | **90s - 14s**  | **1.1x - 7.0x** | **8% - 86%**   |
+| Implementation | Platform                            | Execution Time | Speedup          | Time Reduction  |
+|:---------------|:------------------------------------|:---------------|:-----------------|:----------------|
+| **ParSGA**     | OpenMP (Ryzen 9 6900HS, 8 cores)    | 98s            | 1.0x             | 0%              |
+| **cuSGA**      | CUDA (NVIDIA RTX 3080 Mobile)       | **120s - 30s** | **0.82x - 3.3x** | **+22% - -70%** |
 
 **These results should however be taken with a grain of salt and are not entirely reflective of what the current implementation could be able to achieve!** 
 
 In fact, there were a few critical problems that occurred during testing:
 
-* **The current input size was nowhere near large enough to achieve full SM occupancy**. The **1.4x speedup** was achieved scheduling **only a single block**, while the **8.2x speedup** was achieved scheduling **only 16 blocks**. Therefore, if the input size were big enough to saturate all SMs, **cuSGA could theoretically achieve numbers that are much higher than this: possibly even 20x - 70x**, assuming Memory Bandwidth doesn't become the limiting factor. Using some maths and profiling, it was possible for me to deduce that in order to schedule at least one block per SM (according to my hardware), the input size would have to be orders of magnitude larger than the one that was used in the current testing:
+* **The current input size was nowhere near large enough to achieve full SM occupancy**. The **0.82x speedup** was achieved under the very unfavorable case of **Connected Components level Synchronization** with scheduling **only a single block**, while the **3.3x speedup** was achieved by using **Grid level Synchronization**, which proved to be **more consistent (since it doesn't make use of Connected Components at all)** but still **Active Thread Occupancy proved to be extremely poor due to the minuscule amount of Insertions that needed propagation**. Therefore, if the input size were big enough to saturate all SMs, **cuSGA could theoretically achieve numbers that are much higher than this**, assuming Memory Bandwidth doesn't become the limiting factor. Using some maths and profiling, it was possible for me to deduce that in order to schedule at least one block per SM (according to my hardware), the input size would have to be orders of magnitude larger than the one that was used in the current testing:
 
   ```
-  REALISTIC_CC_SIZE(~=1000) * NUMBER_OF_WARPS_PER_BLOCK(=20) * NUMBER_OF_SM(=48) ~= 1Mil Nodes
+  REALISTIC_CC_SIZE(~=1000) * NUMBER_OF_WARPS_PER_BLOCK(=48) * NUMBER_OF_SM(=48) ~= 750k Nodes
   ```
 
-* **The Connected Components of varying size were simulated by grouping together smaller Components, meaning that the components generated were composed roughly of the same number of nodes**. **However, this is not guaranteed to be the case with real data!** Further testing using actual data should be done, as this could be a limiting factor for the theoretical peak performance of the algorithm: if the Connected Component Sizes were highly irregular, some Warps could end up taking a lot longer to complete their work compared to other Warps in the same Block, hogging hardware resources until the whole Block finishes its computation. 
+* **The Connected Components of varying size were simulated by grouping together smaller Components, meaning that the components generated were composed roughly of the same number of nodes**. **However, this is not guaranteed to be the case with real data!** Further testing using actual data should be done, as this could be a **limiting factor for the theoretical peak performance of the Connected Components level Synchronization Algorithm**: if the Connected Component Sizes were highly irregular, some Warps could end up taking a lot longer to complete their work compared to other Warps in the same Block, hogging hardware resources until the whole Block finishes its computation. **The Grid level Synchronization Algorithm on the other hand, would remain completely unaffected, thus possibly offering better scalability, especially in the case of big Graphs!.**
 
 ---
 
