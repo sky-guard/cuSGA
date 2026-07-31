@@ -79,7 +79,9 @@ Finally, let's review the results and bottlenecks identified by NSight Systems a
 
   ***NOTE**: These issues, although present, are very much minor compared to the first one. This is coherent with the results shown by NCU (around ~20% estimated Speedup VS ~75% estimated Speedup for Stalls). Although Maximum Occupancy in this case is only 75% due to the high Register Usage, the final number was overall still quite good (9 Warps per Scheduler VS 12 Theoretical Maximum). The same can be also said about Work Imbalance (Maximum 45% above average, Minimum 18% below average).*
 
-Some final conclusions and thoughts: **if more testing were to be done, analyzing how many Insertions can be propagated on average in parallel across all the Nodes, and if this number were big enough... then parallelizing this Algorithm on a GPU could be considered worth it. But if instead, this number were quite low... then that would mean that this Problem is mostly Serial in nature and thus attempting to parallelize it on a massively-parallel throughput-focused device is bound to be mostly unsuccessful**. Quick and informal testing seems to suggest that the number of Insertions that can be propagated in parallel consists of only around 2-3% of the overall Graph Size.
+Some final conclusions and thoughts: **if more testing were to be done, analyzing how many Insertions can be propagated on average in parallel across all the Nodes, and if this number were big enough... then parallelizing this Algorithm on a GPU could be considered worth it. But if instead, this number were quite low... then that would mean that this Problem is mostly Serial in nature and thus attempting to parallelize it on a massively-parallel throughput-focused device is bound to be mostly unsuccessful**. 
+
+***NOTE**: Some quick (and informal) testing seems to suggest that the number of Insertions that can be propagated in parallel consists of only around 2-3% of the overall Graph Size. Assuming that the input Graph Size were able to scale to a big enough number, which should indeed be the case with complex genomes, this could make the parallelization worth it.*
 
 ---
 
@@ -129,6 +131,8 @@ To align a sequence using **Grid level Synchronization with Cooperative Groups (
 ```bash
 ./cuSGA -s SEQUENCE_FILE -p PANGENOME_GRAPH_FILE -c CONNECTED_COMPONENTS_FILE_PREFIX
 ```
+
+***NOTE**: **For very large Graphs, it is recommended to pass the ```--block-aggregation``` flag** to enable a variant of the Grid level Synchronization Kernel that additionally also makes use of Block Aggregation (on top of the already existing Warp Aggregation). This is to further improve Scalability by focusing on minimizing the concurrent atomic writes on the Global Queue Size, which is expected to become more and more of a limiting factor for performance as the input size grows. **For smaller graphs, such as the one used during testing, performance loss appears to be minimal (10.8x speedup vs 11.2x speedup).***
 
 To align a sequence using **Connected Components level Synchronization (NOT RECOMMENDED)** and print the resulting Alignment Scores, please run the following command:
 ```bash

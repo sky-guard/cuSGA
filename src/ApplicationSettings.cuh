@@ -29,7 +29,9 @@ namespace cuSGA::ApplicationSettings {
 
     // Alignment version
     inline constexpr auto USE_CC_ALIGNMENT_FLAG{"--cc-align"};
-    inline constexpr auto USE_CC_ALIGNMENT_FLAG_DESCRIPTION{"The Alignment Algorithm type to use: Grid level (DEFAULT) or Connected Components level (enabled by setting this flag). Grid level Alignment is in general a lot more performant."};
+    inline constexpr auto USE_CC_ALIGNMENT_FLAG_DESCRIPTION{"The Alignment Algorithm type to use: Grid level (DEFAULT) or Connected Components level (enabled by setting this flag). Grid level Alignment is in general more performant. Connected Components level Alignment might outperform it for very large Graphs."};
+    inline constexpr auto USE_BLOCK_AGGREGATION_FLAG{"--block-aggregation"};
+    inline constexpr auto USE_BLOCK_AGGREGATION_FLAG_DESCRIPTION{"Enable Block Aggregation for the Grid level Alignment Algorithm. This is recommended to boost performance if the Graph Size is very big."};
 
     // Parsed arguments struct
     struct ParsedArguments {
@@ -37,6 +39,7 @@ namespace cuSGA::ApplicationSettings {
         ::std::string pangenomeGraphFileName{};
         ::std::string connectedComponentsFileNames[NUM_BASES]{};
         bool useCCAlignment{false};
+        bool useBlockAggregation{false};
     };
 
     inline ParsedArguments parseArguments(const int argc, const char* const argv[]) {
@@ -56,6 +59,7 @@ namespace cuSGA::ApplicationSettings {
         app.add_option(SEQUENCE_FILE_NAME_FLAG, parsedArguments.sequenceFileName, SEQUENCE_FILE_NAME_DESCRIPTION)->required();
         app.add_option(PANGENOME_GRAPH_FILE_NAME_FLAG, parsedArguments.pangenomeGraphFileName, PANGENOME_GRAPH_FILE_NAME_DESCRIPTION)->required();
         app.add_flag(USE_CC_ALIGNMENT_FLAG, parsedArguments.useCCAlignment, USE_CC_ALIGNMENT_FLAG_DESCRIPTION);
+        app.add_flag(USE_BLOCK_AGGREGATION_FLAG, parsedArguments.useBlockAggregation, USE_BLOCK_AGGREGATION_FLAG_DESCRIPTION);
         const auto connectedComponentsFileNamesOption{app.add_option(CONNECTED_COMPONENTS_FILE_NAMES_FLAG, connectedComponentsFileNamesVector, CONNECTED_COMPONENTS_FILE_NAMES_DESCRIPTION)->expected(1, NUM_BASES)};
 
         // Parse application arguments

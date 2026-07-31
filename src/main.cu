@@ -18,7 +18,16 @@ int main(const int argc, const char* const argv[]) {
         auto sequenceGraph{::cuSGA::SequenceGraph{parsedArguments.pangenomeGraphFileName, parsedArguments.sequenceFileName, parsedArguments.connectedComponentsFileNames, true}};
 
         // Align sequence to graph
-        const auto scores{(!parsedArguments.useCCAlignment)? sequenceGraph.gridAlign(parsedArguments.sequenceFileName) : sequenceGraph.connectedComponentsAlign(parsedArguments.sequenceFileName)};
+        const ::cuSGA::cost_t* scores{};
+        if (parsedArguments.useCCAlignment) {
+            scores = sequenceGraph.connectedComponentsAlign(parsedArguments.sequenceFileName);
+        }
+        else if (parsedArguments.useBlockAggregation) {
+            scores = sequenceGraph.gridBlockAggregationAlign(parsedArguments.sequenceFileName);
+        }
+        else {
+            scores = sequenceGraph.gridAlign(parsedArguments.sequenceFileName);
+        }
 
         // Print results
         ::std::cout << "cuSGA Alignment Scores: " << std::endl;
