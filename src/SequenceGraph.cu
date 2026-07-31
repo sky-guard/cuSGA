@@ -482,10 +482,32 @@ namespace cuSGA {
             const auto updatedCurrentLayerNeighborCost{(sequenceBase == neighborBase)? previousLayerNodeCost : (previousLayerNodeCost + SequenceGraph::SUBSTITUTION_COST)};
 
             // Set cost to atomic min
-            // NOTE: Because in-degree for a node should be low, we can avoid doing warp / block level reduction in order to reduce overhead
             if (const auto previousCurrentLayerNeighborCost{::atomicMin(d_currentCosts + neighborIdx, updatedCurrentLayerNeighborCost)}; (updatedCurrentLayerNeighborCost < previousCurrentLayerNeighborCost) && (!::atomicExch(d_frontierQueue + neighborIdx, 1))) {
-                const auto previousFrontierSize{::atomicAdd(d_frontierBufferSize, 1)};
-                d_frontierBuffer[previousFrontierSize] = neighborIdx;
+                // Get active mask
+                const auto activeMask{::__activemask()};
+
+                // Get thread rank
+                const auto threadRank{::__popc(activeMask & ((1u << threadIdx.x) - 1))};
+
+                // Get number of insertions
+                const auto numInsertions{::__popc(activeMask)};
+
+                // Get leader lane index
+                const auto leaderLaneIdx{::__ffs(static_cast<int>(activeMask)) - 1};
+
+                // Get insertion base
+                nodeSize_t insertionBase{0};
+
+                // Leader thread reserves space for all threads in the warp
+                if (::threadIdx.x == leaderLaneIdx) {
+                    insertionBase = ::atomicAdd(d_frontierBufferSize, numInsertions);
+                }
+
+                // Shuffle insertion base
+                insertionBase = ::__shfl_sync(activeMask, insertionBase, leaderLaneIdx);
+
+                // Insert in queue
+                d_frontierBuffer[insertionBase + threadRank] = neighborIdx;
             }
         }
     }
@@ -683,7 +705,7 @@ namespace cuSGA {
                         const auto active{::cooperative_groups::coalesced_threads()};
 
                         // Get insertion base
-                        ::uint8_t insertionBase{0};
+                        nodeSize_t insertionBase{0};
 
                         // Leader thread reserves space for all threads in the warp
                         if (active.thread_rank() == 0) {
