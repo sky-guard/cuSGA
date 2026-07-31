@@ -1,12 +1,12 @@
 # cuSGA: GPU-Accelerated Sequence to Graph Alignment
 
-A **CUDA**-native implementation of the [**ParSGA**](https://github.com/ParBLiSS/ParSGA.git) Algorithm for DNA Sequence to Graph Alignment!
+A **CUDA**-native implementation **(and revision)** of the [**ParSGA**](https://github.com/ParBLiSS/ParSGA.git) Algorithm for DNA Sequence to Graph Alignment!
 
 ---
 
 ## Algorithm Implementation & Report
 
-cuSGA is a CUDA implementation of the ParSGA Algorithm. As such, it implements five main Kernels:
+cuSGA is a CUDA implementation (and revision) of the ParSGA Algorithm. As such, it implements five main Kernels:
 * Initialization.
 * Deletions.
 * Substitutions.
@@ -63,9 +63,11 @@ Lastly, a final round of profiling through NSight Systems and NSight Compute sho
 
 One final parallelization attempt was made, this time **going back to the original idea of a Grid level Synchronous exploration**. In fact, the original implementation turned out to be quite lucklaster not exactly because it was a bad idea, but in fact becasue it could have been implemented way better: instead of launching one Kernel per level of the exploration and transferring Frontier data back and forth from Device to Host, **the same idea could have been implemented using Cooperative Groups, thus resolving both of the aformentioned issues**. 
 
-This idea was also sparked by the following realization about the original ParSGA Algorithm: **it is possible to determine at Substitutions time exactly which Nodes / Connected Components will need to be visited in the following Insertions phase**. In fact, **a Node needs to be visited for Insertions / Propagations only if there is a Match at Substitutions time that provides an improvement over the previous cost!** This information can then be used in order to avoid a full scan of the Graph at the start of the Insertions phase to find the initial Frontier.
+This idea was also sparked by the following realization about the original ParSGA Algorithm: **it is possible to determine at Substitutions time exactly which Nodes / Connected Components will need to be visited in the following Insertions phase**. In fact, **a Node needs to be visited for Insertions / Propagations only if there is an improvement at Substitutions time!** This information can then be used in order to avoid a full scan of the Graph at the start of the Insertions phase to find the initial Frontier.
 
-The same idea also obviously can be applied to the Connected Components level Synchronization version of the Algorithm, although with diminishing returns as opposed to the Grid level Synchronization version, which in fact turned out to be the **most successful parallelization attempt, as well as the most consistent, since it doesn't rely on Connected Components at all.**
+The same idea also obviously can be applied to the Connected Components level Synchronization version of the Algorithm, although with diminishing returns as opposed to the Grid level Synchronization version, which in fact turned out to be the **most successful parallelization attempt, as well as the most consistent, since it doesn't rely on Connected Components at all.** 
+
+Thus, **I propose this revised version of the Algorithm as the one to be used (by default) by cuSGA**. **Could this be a definitive improvement over the original ParSGA Algorithm, even in a CPU-only runtime scenario?** More testing would have to be done against an OpenMP implementation of the same Algorithm to find out the answer.
 
 Finally, let's review the results and bottlenecks identified by NSight Systems and NSight Compute:
 
@@ -77,7 +79,7 @@ Finally, let's review the results and bottlenecks identified by NSight Systems a
 
   ***NOTE**: These issues, although present, are very much minor compared to the first one. This is coherent with the results shown by NCU (around ~20% estimated Speedup VS ~75% estimated Speedup for Stalls). Although Maximum Occupancy in this case is only 75% due to the high Register Usage, the final number was overall still quite good (9 Warps per Scheduler VS 12 Theoretical Maximum). The same can be also said about Work Imbalance (Maximum 45% above average, Minimum 18% below average).*
 
-Some final conclusions and thoughts: **if more testing were to be done, analyzing how many Insertions can be propagated on average in parallel across all the Nodes, and if this number were big enough... then parallelizing this Algorithm on a GPU could be considered worth it. But if instead, this number were quite low... then that would mean that this Problem is mostly Serial in nature and thus attempting to parallelize it on a massively-parallel throughput-focused device is bound to be mostly unsuccessful**.
+Some final conclusions and thoughts: **if more testing were to be done, analyzing how many Insertions can be propagated on average in parallel across all the Nodes, and if this number were big enough... then parallelizing this Algorithm on a GPU could be considered worth it. But if instead, this number were quite low... then that would mean that this Problem is mostly Serial in nature and thus attempting to parallelize it on a massively-parallel throughput-focused device is bound to be mostly unsuccessful**. Quick and informal testing seems to suggest that the number of Insertions that can be propagated in parallel consists of only around 2-3% of the overall Graph Size.
 
 ---
 
