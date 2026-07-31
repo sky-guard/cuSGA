@@ -193,16 +193,16 @@ cuSGA expects the following Input Files:
 
 The following results were obtained testing the alignment of 100 Sequences, each one of length ~10k, to the Pangenome Graph of Salmonella, which consists roughly of ~10k nodes / edges, using a variety of Connected Component sizes:
 
-| Implementation | Platform                            | Execution Time | Speedup           | Time Reduction  |
-|:---------------|:------------------------------------|:---------------|:------------------|:----------------|
-| **ParSGA**     | OpenMP (Ryzen 9 6900HS, 8 cores)    | 98s            | 1.0x              | 0%              |
-| **cuSGA**      | CUDA (NVIDIA RTX 3080 Mobile)       | **120s - 9s**  | **0.82x - 11.0x** | **+22% - -90%** |
+| Implementation | Platform                            | Execution Time    | Speedup          | Time Reduction  |
+|:---------------|:------------------------------------|:------------------|:-----------------|:----------------|
+| **ParSGA**     | OpenMP (Ryzen 9 6900HS, 8 cores)    | 95s               | 1.0x             | 0%              |
+| **cuSGA**      | CUDA (NVIDIA RTX 3080 Mobile)       | **120.2s - 8.5s** | **0.8x - 11.2x** | **+26% - -91%** |
 
 **These results should however be taken with a grain of salt and are not entirely reflective of what the current implementation could be able to achieve!** 
 
 In fact, there were a few critical problems that occurred during testing:
 
-* **The current input size was nowhere near large enough to achieve full SM occupancy**. The **0.82x speedup** was achieved under the very unfavorable case of **Connected Components level Synchronization** with scheduling **only a single block**, while the **11.0x speedup** was achieved by using **Grid level Synchronization**, which proved to be **more consistent (since it doesn't make use of Connected Components at all)** but still **Active Thread Occupancy proved to be extremely poor due to the minuscule amount of Insertions that needed propagation**. Therefore, if the input size were big enough to saturate all SMs, **cuSGA could theoretically achieve numbers that are much higher than this**, assuming Memory Bandwidth doesn't become the limiting factor. Using some maths and profiling, it was possible for me to deduce that in order to schedule at least one block per SM (according to my hardware), the input size would have to be orders of magnitude larger than the one that was used in the current testing:
+* **The current input size was nowhere near large enough to achieve full SM occupancy**. The **0.8x speedup** was achieved under the very unfavorable case of **Connected Components level Synchronization** with scheduling **only a single block**, while the **11.2x speedup** was achieved by using **Grid level Synchronization**, which proved to be **more consistent (since it doesn't make use of Connected Components at all)** but still **Active Thread Occupancy proved to be extremely poor due to the minuscule amount of Insertions that needed propagation**. Therefore, if the input size were big enough to saturate all SMs, **cuSGA could theoretically achieve numbers that are much higher than this**, assuming Memory Bandwidth doesn't become the limiting factor. Using some maths and profiling, it was possible for me to deduce that in order to schedule at least one block per SM (according to my hardware), the input size would have to be orders of magnitude larger than the one that was used in the current testing:
 
   ```
   REALISTIC_CC_SIZE(~=1000) * NUMBER_OF_WARPS_PER_BLOCK(=48) * NUMBER_OF_SM(=48) ~= 750k Nodes
