@@ -123,14 +123,14 @@ First, navigate to the build directory (or where your executable is located):
 cd build
 ```
 
-To align a sequence using **Connected Components level Synchronization** and print the resulting Alignment Scores, please run the following command:
+To align a sequence using **Grid level Synchronization with Cooperative Groups (DEFAULT)** and print the resulting Alignment Scores, please run the following command:
 ```bash
 ./cuSGA -s SEQUENCE_FILE -p PANGENOME_GRAPH_FILE -c CONNECTED_COMPONENTS_FILE_PREFIX
 ```
 
-To align a sequence using **Grid level Synchronization with Cooperative Groups** and print the resulting Alignment Scores, please run the following command:
+To align a sequence using **Connected Components level Synchronization (NOT RECOMMENDED)** and print the resulting Alignment Scores, please run the following command:
 ```bash
-./cuSGA --grid-alignment -s SEQUENCE_FILE -p PANGENOME_GRAPH_FILE -c CONNECTED_COMPONENTS_FILE_PREFIX
+./cuSGA --cc-align -s SEQUENCE_FILE -p PANGENOME_GRAPH_FILE -c CONNECTED_COMPONENTS_FILE_PREFIX
 ```
 
 ***NOTE**: For additional information regarding the expected files and their formats, please read [Input File Formats](#input-file-formats).*
