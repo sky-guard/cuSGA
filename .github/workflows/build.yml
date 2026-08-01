@@ -18,7 +18,12 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install build-essential cmake nvidia-cuda-toolkit -y
+          sudo apt-get install build-essential nvidia-cuda-toolkit -y
+      - name: Install CMake 4.2
+        run: |
+          wget https://github.com/Kitware/CMake/releases/download/v4.2.0/cmake-4.2.0-linux-x86_64.sh
+          chmod +x cmake-4.2.0-linux-x86_64.sh
+          sudo ./cmake-4.2.0-linux-x86_64.sh --skip-license --prefix=/usr/local   
 
       - name: Generate build scripts
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release
