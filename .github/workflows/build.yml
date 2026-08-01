@@ -26,7 +26,7 @@ jobs:
           sudo ./cmake-4.2.0-linux-x86_64.sh --skip-license --prefix=/usr/local   
 
       - name: Generate build scripts
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++
 
       - name: Build project
         run: cmake --build build -j
