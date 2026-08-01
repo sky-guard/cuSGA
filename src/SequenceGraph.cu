@@ -458,7 +458,7 @@ namespace cuSGA {
                 deletions();
 
                 // Perform substitutions for the given layer
-                cooperativeSubstitutions(layerIdx, d_frontierBufferSize1, d_frontierBuffer1, d_frontierQueue1);
+                cooperativeBlockAggregationSubstitutions(layerIdx, d_frontierBufferSize1, d_frontierBuffer1, d_frontierQueue1);
 
                 // Perform insertions and propagations for the given layer (early return if last layer)
                 cooperativeBlockAggregationInsertionsAndPropagations(layerIdx, d_frontierBuffer1, d_frontierBuffer2, d_frontierQueue1, d_frontierQueue2, d_frontierBufferSize1, d_frontierBufferSize2);
@@ -571,23 +571,120 @@ namespace cuSGA {
                 // Get number of insertions
                 const auto numInsertions{::__popc(activeMask)};
 
-                // Get leader lane index
-                const auto leaderLaneIdx{::__ffs(static_cast<int>(activeMask)) - 1};
+                // Get insertion base
+                nodeSize_t insertionBase{0};
+
+                // Leader thread reserves space for all threads in the warp
+                if (threadRank == 0) {
+                    insertionBase = ::atomicAdd(d_frontierBufferSize, numInsertions);
+                }
+
+                // Shuffle insertion base
+                insertionBase = ::__shfl_sync(activeMask, insertionBase, ::__ffs(static_cast<int>(activeMask)) - 1);
+
+                // Insert in queue
+                d_frontierBuffer[insertionBase + threadRank] = neighborIdx;
+            }
+        }
+    }
+
+    __global__ void SequenceGraphKernels::cooperativeBlockAggregationSubstitutions(const edgeSize_t* __restrict__ const d_neighborOffsets, const nodeSize_t* __restrict__ const d_neighborValues, const sequencePack_t* __restrict__ const d_baseValues, const cost_t* __restrict__ const d_previousCosts, cost_t* __restrict__ const d_currentCosts, nodeSize_t* __restrict__ const d_frontierBufferSize, nodeSize_t* __restrict__ const d_frontierBuffer, int* __restrict__ const d_frontierQueue, const nodeSize_t numNodes, const DNABase sequenceBase) {
+        // Shared memory queue
+        __shared__ nodeSize_t shared_queueSize;
+        __shared__ nodeSize_t shared_queueBuffer[INS_SHARED_QUEUE_BUFFER_SIZE];
+        __shared__ nodeSize_t shared_globalInsertionBase;
+
+        // Get thread node index and check for thread overflow
+        const auto nodeIdx{::blockIdx.x * ::blockDim.x + ::threadIdx.x};
+        if (nodeIdx >= numNodes) {
+            return;
+        }
+
+        // Get node cost in the previous layer
+        const auto previousLayerNodeCost{d_previousCosts[nodeIdx]};
+
+        // Initialize block queue size
+        if (::threadIdx.x == 0) {
+            shared_queueSize = 0;
+        }
+
+        // Synchronize block
+        ::__syncthreads();
+
+        // Loop over all neighbors
+        const auto neighborsStart{d_neighborOffsets[nodeIdx]};
+        const auto neighborEnd{d_neighborOffsets[nodeIdx + 1]};
+        for (auto neighborOffset{neighborsStart}; neighborOffset < neighborEnd; ++neighborOffset) {
+            // Get neighbor index
+            const auto neighborIdx{d_neighborValues[neighborOffset]};
+
+            // Get DNA base for the neighbor
+            const auto neighborBase{PackedDNASequence::getBase(d_baseValues, neighborIdx)};
+
+            // Compute updated node cost
+            const auto updatedCurrentLayerNeighborCost{(sequenceBase == neighborBase)? previousLayerNodeCost : (previousLayerNodeCost + SequenceGraph::SUBSTITUTION_COST)};
+
+            // Set cost to atomic min
+            if (const auto previousCurrentLayerNeighborCost{::atomicMin(d_currentCosts + neighborIdx, updatedCurrentLayerNeighborCost)}; (updatedCurrentLayerNeighborCost < previousCurrentLayerNeighborCost) && (!::atomicExch(d_frontierQueue + neighborIdx, 1))) {
+                // Get active mask
+                const auto activeMask{::__activemask()};
+
+                // Get thread rank
+                const auto threadRank{::__popc(activeMask & ((1u << threadIdx.x) - 1))};
+
+                // Get number of insertions
+                const auto numInsertions{::__popc(activeMask)};
 
                 // Get insertion base
                 nodeSize_t insertionBase{0};
 
                 // Leader thread reserves space for all threads in the warp
-                if (::threadIdx.x == leaderLaneIdx) {
-                    insertionBase = ::atomicAdd(d_frontierBufferSize, numInsertions);
+                if (threadRank == 0) {
+                    insertionBase = ::atomicAdd(&shared_queueSize, numInsertions);
                 }
+
+                // Get leader lane index
+                const auto leaderLaneIdx{::__ffs(static_cast<int>(activeMask)) - 1};
 
                 // Shuffle insertion base
                 insertionBase = ::__shfl_sync(activeMask, insertionBase, leaderLaneIdx);
 
                 // Insert in queue
                 d_frontierBuffer[insertionBase + threadRank] = neighborIdx;
+
+                // Check for shared queue overflow and fall back to inserting directly in global queue if necessary
+                if (insertionBase + numInsertions > INS_SHARED_QUEUE_BUFFER_SIZE) {
+                    // Leader thread reserves space for all threads in the warp
+                    if (threadRank == 0) {
+                        insertionBase = ::atomicAdd(d_frontierBufferSize, numInsertions);
+                    }
+
+                    // Shuffle insertion base
+                    insertionBase = ::__shfl_sync(activeMask, insertionBase, leaderLaneIdx);
+
+                    // Insert in queue
+                    d_frontierBuffer[insertionBase + threadRank] = neighborIdx;
+                } else {
+                    // Insert in shared queue
+                    shared_queueBuffer[insertionBase + threadRank] = neighborIdx;
+                }
             }
+        }
+
+        // Synchronize block
+        ::__syncthreads();
+
+        // Flush shared memory queue to global queue
+        if ((::threadIdx.x == 0) && (shared_queueSize > 0)) {
+            shared_globalInsertionBase = ::atomicAdd(d_frontierBufferSize, shared_queueSize);
+        }
+
+        // Synchronize block
+        ::__syncthreads();
+
+        // Copy items from shared memory block queue to global queue buffer
+        for (targetSize_t threadIdx{::threadIdx.x}; threadIdx < shared_queueSize; threadIdx += ::blockDim.x) {
+            d_frontierBuffer[shared_globalInsertionBase + threadIdx] = shared_queueBuffer[threadIdx]; // NOLINT
         }
     }
 
@@ -821,7 +918,7 @@ namespace cuSGA {
     __global__ void SequenceGraphKernels::cooperativeBlockAggregationInsertionsAndPropagations(const edgeSize_t* __restrict__ const d_neighborOffsets, const nodeSize_t* __restrict__ const d_neighborValues, cost_t* __restrict__ const d_currentCosts, nodeSize_t* __restrict__ const d_frontierBuffer1, nodeSize_t* __restrict__ const d_frontierBuffer2, int* __restrict__ const d_frontierQueue1, int* __restrict__ const d_frontierQueue2, nodeSize_t* __restrict__ const d_frontierBufferSize1, nodeSize_t* __restrict__ const d_frontierBufferSize2, const bool earlyExit) {
         // Shared memory queue
         __shared__ nodeSize_t shared_queueSize;
-        __shared__ nodeSize_t shared_queueBuffer[SHARED_QUEUE_BUFFER_SIZE];
+        __shared__ nodeSize_t shared_queueBuffer[INS_SHARED_QUEUE_BUFFER_SIZE];
         __shared__ nodeSize_t shared_globalInsertionBase;
 
         // Get grid handler
@@ -905,7 +1002,7 @@ namespace cuSGA {
                         insertionBase = active.shfl(insertionBase, 0);
 
                         // Check for shared queue overflow and fall back to inserting directly in global queue if necessary
-                        if (insertionBase + active.size() > SHARED_QUEUE_BUFFER_SIZE) {
+                        if (insertionBase + active.size() > INS_SHARED_QUEUE_BUFFER_SIZE) {
                             // Leader thread reserves space for all threads in the warp
                             if (active.thread_rank() == 0) {
                                 insertionBase = ::atomicAdd(queueSize, active.size());

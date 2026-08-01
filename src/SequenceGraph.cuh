@@ -27,15 +27,17 @@ namespace cuSGA {
         __global__ void initialize(const sequencePack_t* __restrict__ d_baseValues, cost_t* __restrict__ d_currentCosts, nodeSize_t numNodes, DNABase initialSequenceBase);
 
         // Substitutions kernel
+        inline constexpr targetSize_t SUB_SHARED_QUEUE_BUFFER_SIZE{((1 << 10) - 2) / sizeof(nodeSize_t)};
         __global__ void substitutions(const edgeSize_t* __restrict__ d_neighborOffsets, const nodeSize_t* __restrict__ d_neighborValues, const sequencePack_t* __restrict__ d_baseValues, const cost_t* __restrict__ d_previousCosts, cost_t* __restrict__ d_currentCosts, bool* __restrict__ d_needsVisiting, const connectedComponentSize_t* __restrict__ connectedComponentsReverseMapping, nodeSize_t numNodes, DNABase sequenceBase);
         __global__ void cooperativeSubstitutions(const edgeSize_t* __restrict__ d_neighborOffsets, const nodeSize_t* __restrict__ d_neighborValues, const sequencePack_t* __restrict__ d_baseValues, const cost_t* __restrict__ d_previousCosts, cost_t* __restrict__ d_currentCosts, nodeSize_t* __restrict__ d_frontierBufferSize, nodeSize_t* __restrict__ d_frontierBuffer, int* __restrict__ d_frontierQueue, nodeSize_t numNodes, DNABase sequenceBase);
+        __global__ void cooperativeBlockAggregationSubstitutions(const edgeSize_t* __restrict__ d_neighborOffsets, const nodeSize_t* __restrict__ d_neighborValues, const sequencePack_t* __restrict__ d_baseValues, const cost_t* __restrict__ d_previousCosts, cost_t* __restrict__ d_currentCosts, nodeSize_t* __restrict__ d_frontierBufferSize, nodeSize_t* __restrict__ d_frontierBuffer, int* __restrict__ d_frontierQueue, nodeSize_t numNodes, DNABase sequenceBase);
 
         // Deletions kernel
         __global__ void deletions(const cost_t* __restrict__ d_previousCosts, cost_t* __restrict__ d_currentCosts, nodeSize_t numNodes);
 
         // Insertions and propagations kernel
         inline constexpr targetSize_t SHARED_FRONTIER_BUFFER_SIZE{KernelUtils::WARP_SIZE << 1};
-        inline constexpr targetSize_t SHARED_QUEUE_BUFFER_SIZE{((1 << 14) - 2) / sizeof(nodeSize_t)};
+        inline constexpr targetSize_t INS_SHARED_QUEUE_BUFFER_SIZE{((1 << 14) - 2) / sizeof(nodeSize_t)};
         __device__ __forceinline__ void syncFrontierSizes(Frontier* __restrict__ shared_frontier, Frontier* __restrict__ warpFrontier, unsigned mask);
         __device__ __forceinline__ void processNeighbor(Frontier* __restrict__ warpFrontier, Frontier* __restrict__ shared_frontier, cost_t* __restrict__ d_currentCosts, nodeSize_t neighborIdx, nodeSize_t neighborLocalIdx, cost_t updatedCurrentLayerNeighborCost);
         __device__ __forceinline__ void processNode(nodeSize_t nodeIdx, Frontier* __restrict__ warpFrontier, Frontier* __restrict__ shared_frontier, const edgeSize_t* __restrict__ d_neighborOffsets, const nodeSize_t* __restrict__ d_neighborValues, const connectedComponentSize_t* __restrict__ d_connectedComponentLocalIndexMappings, cost_t* __restrict__ d_currentCosts);
@@ -303,6 +305,19 @@ namespace cuSGA {
             // Launch kernel
             const auto sequenceBase{sequence[layerIdx]};
             KernelUtils::cudaLaunchKernel<SequenceGraphKernels::cooperativeSubstitutions>(gridSize, blockSize, 0, cudaStreamDefault, pinned_instance->pangenomeGraph.getNeighborOffsets(), pinned_instance->pangenomeGraph.getNeighborValues(), pinned_instance->pangenomeGraph.getBaseValues().getBases(), pinned_instance->costsDoubleBuffer.alternate(), pinned_instance->costsDoubleBuffer.current(), d_frontierBufferSize, d_frontierBuffer, d_frontierQueue, pinned_instance->pangenomeGraph.getNumNodes(), sequenceBase);
+        }
+
+        // Launch cooperative substitutions kernel (with block aggregation)
+        __host__ __forceinline__ void cooperativeBlockAggregationSubstitutions(const sequenceSize_t layerIdx, nodeSize_t* __restrict__ const d_frontierBufferSize, nodeSize_t* __restrict__ const d_frontierBuffer, int* __restrict__ const d_frontierQueue) const {
+            // Get block size
+            const auto blockSize{KernelUtils::cudaSizeBlock<SequenceGraphKernels::cooperativeBlockAggregationSubstitutions>()};
+
+            // Get grid size
+            const auto gridSize{KernelUtils::cudaSizeGrid(pangenomeGraph.getNumNodes(), blockSize)};
+
+            // Launch kernel
+            const auto sequenceBase{sequence[layerIdx]};
+            KernelUtils::cudaLaunchKernel<SequenceGraphKernels::cooperativeBlockAggregationSubstitutions>(gridSize, blockSize, 0, cudaStreamDefault, pinned_instance->pangenomeGraph.getNeighborOffsets(), pinned_instance->pangenomeGraph.getNeighborValues(), pinned_instance->pangenomeGraph.getBaseValues().getBases(), pinned_instance->costsDoubleBuffer.alternate(), pinned_instance->costsDoubleBuffer.current(), d_frontierBufferSize, d_frontierBuffer, d_frontierQueue, pinned_instance->pangenomeGraph.getNumNodes(), sequenceBase);
         }
 
         // Launch deletions kernel
