@@ -1,0 +1,13 @@
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    open-pull-requests-limit: 999
+    schedule:
+      interval: weekly
+      time: "08:00"
+      timezone: Europe/Rome
+    target-branch: main
+    assignees:
+      - sky-guard
