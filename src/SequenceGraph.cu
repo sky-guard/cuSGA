@@ -458,7 +458,8 @@ namespace cuSGA {
                 deletions();
 
                 // Perform substitutions for the given layer
-                cooperativeBlockAggregationSubstitutions(layerIdx, d_frontierBufferSize1, d_frontierBuffer1, d_frontierQueue1);
+                // NOTE: Due to the sparse nature of insertions, it would seem performing block aggregation at the substitution level is not worth it.
+                cooperativeSubstitutions(layerIdx, d_frontierBufferSize1, d_frontierBuffer1, d_frontierQueue1);
 
                 // Perform insertions and propagations for the given layer (early return if last layer)
                 cooperativeBlockAggregationInsertionsAndPropagations(layerIdx, d_frontierBuffer1, d_frontierBuffer2, d_frontierQueue1, d_frontierQueue2, d_frontierBufferSize1, d_frontierBufferSize2);
@@ -649,9 +650,6 @@ namespace cuSGA {
                 // Shuffle insertion base
                 insertionBase = ::__shfl_sync(activeMask, insertionBase, leaderLaneIdx);
 
-                // Insert in queue
-                d_frontierBuffer[insertionBase + threadRank] = neighborIdx;
-
                 // Check for shared queue overflow and fall back to inserting directly in global queue if necessary
                 if (insertionBase + numInsertions > INS_SHARED_QUEUE_BUFFER_SIZE) {
                     // Leader thread reserves space for all threads in the warp
@@ -683,7 +681,8 @@ namespace cuSGA {
         ::__syncthreads();
 
         // Copy items from shared memory block queue to global queue buffer
-        for (targetSize_t threadIdx{::threadIdx.x}; threadIdx < shared_queueSize; threadIdx += ::blockDim.x) {
+        const auto numToInsert{::min(shared_queueSize, INS_SHARED_QUEUE_BUFFER_SIZE)};
+        for (targetSize_t threadIdx{::threadIdx.x}; threadIdx < numToInsert; threadIdx += ::blockDim.x) {
             d_frontierBuffer[shared_globalInsertionBase + threadIdx] = shared_queueBuffer[threadIdx]; // NOLINT
         }
     }
@@ -1033,7 +1032,8 @@ namespace cuSGA {
             cooperative_groups::thread_block::sync();
 
             // Copy items from shared memory block queue to global queue buffer
-            for (targetSize_t threadIdx{::threadIdx.x}; threadIdx < shared_queueSize; threadIdx += ::blockDim.x) {
+            const auto numToInsert{::min(shared_queueSize, INS_SHARED_QUEUE_BUFFER_SIZE)};
+            for (targetSize_t threadIdx{::threadIdx.x}; threadIdx < numToInsert; threadIdx += ::blockDim.x) {
                 queueBuffer[shared_globalInsertionBase + threadIdx] = shared_queueBuffer[threadIdx]; // NOLINT
             }
 
