@@ -27,7 +27,7 @@ namespace cuSGA {
         __global__ void initialize(const sequencePack_t* __restrict__ d_baseValues, cost_t* __restrict__ d_currentCosts, nodeSize_t numNodes, DNABase initialSequenceBase);
 
         // Substitutions kernel
-        inline constexpr targetSize_t SUB_SHARED_QUEUE_BUFFER_SIZE{((1 << 10) - 2) / sizeof(nodeSize_t)};
+        inline constexpr targetSize_t SUB_SHARED_QUEUE_BUFFER_SIZE{((1 << 14) - 2) / sizeof(nodeSize_t)};
         __global__ void substitutions(const edgeSize_t* __restrict__ d_neighborOffsets, const nodeSize_t* __restrict__ d_neighborValues, const sequencePack_t* __restrict__ d_baseValues, const cost_t* __restrict__ d_previousCosts, cost_t* __restrict__ d_currentCosts, bool* __restrict__ d_needsVisiting, const connectedComponentSize_t* __restrict__ connectedComponentsReverseMapping, nodeSize_t numNodes, DNABase sequenceBase);
         __global__ void cooperativeSubstitutions(const edgeSize_t* __restrict__ d_neighborOffsets, const nodeSize_t* __restrict__ d_neighborValues, const sequencePack_t* __restrict__ d_baseValues, const cost_t* __restrict__ d_previousCosts, cost_t* __restrict__ d_currentCosts, nodeSize_t* __restrict__ d_frontierBufferSize, nodeSize_t* __restrict__ d_frontierBuffer, int* __restrict__ d_frontierQueue, nodeSize_t numNodes, DNABase sequenceBase);
         __global__ void cooperativeBlockAggregationSubstitutions(const edgeSize_t* __restrict__ d_neighborOffsets, const nodeSize_t* __restrict__ d_neighborValues, const sequencePack_t* __restrict__ d_baseValues, const cost_t* __restrict__ d_previousCosts, cost_t* __restrict__ d_currentCosts, nodeSize_t* __restrict__ d_frontierBufferSize, nodeSize_t* __restrict__ d_frontierBuffer, int* __restrict__ d_frontierQueue, nodeSize_t numNodes, DNABase sequenceBase);
