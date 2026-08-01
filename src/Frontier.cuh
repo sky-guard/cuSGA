@@ -30,7 +30,7 @@ namespace cuSGA {
         Frontier() = default;
 
         // Parameterized constructor
-        __host__ __device__ __forceinline__ Frontier(const nodeSize_t currentSize, const nodeSize_t alternateSize, const DoubleBuffer<nodeSize_t>& __restrict__ doubleBuffer, queuePack_t* const isInQueue) : currentSize{currentSize}, alternateSize{alternateSize}, doubleBuffer{doubleBuffer}, isInQueue{isInQueue} {}
+        __host__ __device__ __forceinline__ Frontier(const nodeSize_t currentSize, const nodeSize_t alternateSize, const DoubleBuffer<nodeSize_t>& doubleBuffer, queuePack_t* const isInQueue) : currentSize{currentSize}, alternateSize{alternateSize}, doubleBuffer{doubleBuffer}, isInQueue{isInQueue} {}
 
         // Copy constructor
         Frontier(const Frontier& other) = default;
@@ -64,7 +64,7 @@ namespace cuSGA {
         }
 
         // Get frontier values
-        __host__ __device__ __forceinline__ const nodeSize_t* __restrict__ getValues() const {
+        __host__ __device__ __forceinline__ const nodeSize_t* getValues() const {
             return doubleBuffer.current();
         }
 
@@ -79,7 +79,7 @@ namespace cuSGA {
         }
 
         // Get buffers root
-        __host__ __device__ __forceinline__ void* __restrict__ getBuffersRoot() const {
+        __host__ __device__ __forceinline__ void* getBuffersRoot() const {
             return doubleBuffer.getBuffersRoot();
         }
 

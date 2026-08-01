@@ -6,7 +6,7 @@
 #include "KernelUtils.cuh"
 
 namespace cuSGA {
-    __host__ SequenceGraph::SequenceGraph(const ::std::string& pangenomeGraphFileName, const ::std::string& sequenceFileName, ::std::string const (& connectedComponentsFileNames)[NUM_BASES], bool ownsInstance, SequenceGraph* __restrict__ pinned_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) : SequenceGraph{PangenomeGraph{}, PackedDNASequence{}, {0}, {nullptr}, {nullptr}, {nullptr}, {nullptr}, {0}, DoubleBuffer<cost_t>{}, 0, nullptr, ownsInstance, pinned_instanceOptional} {
+    __host__ SequenceGraph::SequenceGraph(const ::std::string& pangenomeGraphFileName, const ::std::string& sequenceFileName, ::std::string const (& connectedComponentsFileNames)[NUM_BASES], bool ownsInstance, SequenceGraph* pinned_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) : SequenceGraph{PangenomeGraph{}, PackedDNASequence{}, {0}, {nullptr}, {nullptr}, {nullptr}, {nullptr}, {0}, DoubleBuffer<cost_t>{}, 0, nullptr, ownsInstance, pinned_instanceOptional} {
         // Get allocator
         KernelUtils::BumpPtrAllocator* allocator{allocatorOptional};
         KernelUtils::BumpPtrAllocator allocatorInstance{};
@@ -156,7 +156,7 @@ namespace cuSGA {
         sequenceFile.close();
     }
 
-    __host__ SequenceGraph SequenceGraph::copyToDevice(SequenceGraph* __restrict__ d_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) {
+    __host__ SequenceGraph SequenceGraph::copyToDevice(SequenceGraph* d_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) {
         // Check if device instance already exists for this sequence graph
         if (d_instance) {
             throw ::std::runtime_error{"Device instance already exists for this Sequence Graph!"};

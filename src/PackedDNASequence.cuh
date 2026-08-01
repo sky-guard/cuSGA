@@ -32,7 +32,7 @@ namespace cuSGA {
         }
 
         // Get DNA base at a given index
-        __host__ __device__ __forceinline__ static DNABase getBase(const sequencePack_t* __restrict__ bases, const size_t idx) {
+        __host__ __device__ __forceinline__ static DNABase getBase(const sequencePack_t* bases, const size_t idx) {
             // Get chunk index and bit offset from node index
             const auto chunkIdx{idx >> PACK_SHIFT};
             const auto bitOffset{(idx & (PACKING_FACTOR - 1)) * BIT_SIZE};
@@ -46,12 +46,12 @@ namespace cuSGA {
         // Default constructor
         PackedDNASequence() = default;
         // Parameterized constructor
-        __host__ PackedDNASequence(const ::std::string& fileName, bool ownsInstance, PackedDNASequence* __restrict__ pinned_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
+        __host__ PackedDNASequence(const ::std::string& fileName, bool ownsInstance, PackedDNASequence* pinned_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
         // Parameterized constructor
-        __host__ PackedDNASequence(const ::std::string& fileName, ::std::ifstream* file, bool ownsInstance, ::std::optional<sequenceSize_t> numBasesOptional = ::std::nullopt, PackedDNASequence* __restrict__ pinned_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
+        __host__ PackedDNASequence(const ::std::string& fileName, ::std::ifstream* file, bool ownsInstance, ::std::optional<sequenceSize_t> numBasesOptional = ::std::nullopt, PackedDNASequence* pinned_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
 
         // Parameterized constructor
-        __host__ __device__ __forceinline__ PackedDNASequence(const sequenceSize_t numBases, const sequenceSize_t numChunks, sequencePack_t* __restrict__ const bases, const bool ownsInstance, PackedDNASequence* __restrict__ const pinned_instance = nullptr, PackedDNASequence* __restrict__ const d_instance = nullptr) : numBases{numBases}, numChunks{numChunks}, bases{bases}, ownsInstance{ownsInstance}, pinned_instance{pinned_instance}, d_instance{d_instance} {}
+        __host__ __device__ __forceinline__ PackedDNASequence(const sequenceSize_t numBases, const sequenceSize_t numChunks, sequencePack_t* const bases, const bool ownsInstance, PackedDNASequence* const pinned_instance = nullptr, PackedDNASequence* const d_instance = nullptr) : numBases{numBases}, numChunks{numChunks}, bases{bases}, ownsInstance{ownsInstance}, pinned_instance{pinned_instance}, d_instance{d_instance} {}
 
         // Copy constructor
         PackedDNASequence(const PackedDNASequence& other) = default;
@@ -65,7 +65,7 @@ namespace cuSGA {
         ~PackedDNASequence() = default;
 
         // Move packed sequence to device
-        __host__ PackedDNASequence copyToDevice(PackedDNASequence* __restrict__ d_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
+        __host__ PackedDNASequence copyToDevice(PackedDNASequence* d_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
         // Free packed sequence
         __host__ void free() const;
 
@@ -80,7 +80,7 @@ namespace cuSGA {
         }
 
         // Get bases
-        __host__ __device__ __forceinline__ const sequencePack_t* __restrict__ getBases() const {
+        __host__ __device__ __forceinline__ const sequencePack_t* getBases() const {
             return bases;
         }
 
@@ -97,17 +97,17 @@ namespace cuSGA {
         }
 
         // Get pinned instance
-        __host__ __device__ __forceinline__ PackedDNASequence* __restrict__ getPinnedInstance() const {
+        __host__ __device__ __forceinline__ PackedDNASequence* getPinnedInstance() const {
             return pinned_instance;
         }
 
         // Get device instance
-        __host__ __device__ __forceinline__ PackedDNASequence* __restrict__ getDeviceInstance() const {
+        __host__ __device__ __forceinline__ PackedDNASequence* getDeviceInstance() const {
             return d_instance;
         }
 
         // Get buffer root
-        __host__ __device__ __forceinline__ void* __restrict__ getBuffersRoot() const {
+        __host__ __device__ __forceinline__ void* getBuffersRoot() const {
             return bases;
         }
 
@@ -129,10 +129,10 @@ namespace cuSGA {
         // NOTE: Uses pinned memory and linearized memory layout on the device memory
         sequenceSize_t numBases{0};
         sequenceSize_t numChunks{0};
-        sequencePack_t* __restrict__ bases{nullptr};
+        sequencePack_t* bases{nullptr};
         bool ownsInstance{false};
-        PackedDNASequence* __restrict__ pinned_instance{nullptr};
-        PackedDNASequence* __restrict__ d_instance{nullptr};
+        PackedDNASequence* pinned_instance{nullptr};
+        PackedDNASequence* d_instance{nullptr};
     };
 } // cuSGA
 
