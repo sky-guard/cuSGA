@@ -15,18 +15,29 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      - name: Install dependencies
+      - name: Install Dependencies & NVIDIA Repository
         run: |
           sudo apt-get update
-          sudo apt-get install build-essential nvidia-cuda-toolkit -y
+          sudo apt-get install -y build-essential ca-certificates wget lsb-release gpg
+          
+          wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          sudo apt-get update
+          sudo apt-get -y install cuda-toolkit
+
       - name: Install CMake 4.2
         run: |
           wget https://github.com/Kitware/CMake/releases/download/v4.2.0/cmake-4.2.0-linux-x86_64.sh
           chmod +x cmake-4.2.0-linux-x86_64.sh
           sudo ./cmake-4.2.0-linux-x86_64.sh --skip-license --prefix=/usr/local   
 
+      - name: Configure Environment Paths
+        run: |
+          echo "/usr/local/cuda/bin" >> $GITHUB_PATH
+          echo "LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+
       - name: Generate build scripts
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
 
       - name: Build project
         run: cmake --build build -j
