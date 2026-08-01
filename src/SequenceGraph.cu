@@ -569,22 +569,22 @@ namespace cuSGA {
                 // Get thread rank
                 const auto threadRank{::__popc(activeMask & ((1u << threadIdx.x) - 1))};
 
-                // Get number of insertions
-                const auto numInsertions{::__popc(activeMask)};
+                // Get number of insertions and check for insertions
+                if (const auto numInsertions{::__popc(activeMask)}; numInsertions > 0) {
+                    // Get insertion base
+                    nodeSize_t insertionBase{0};
 
-                // Get insertion base
-                nodeSize_t insertionBase{0};
+                    // Leader thread reserves space for all threads in the warp
+                    if (threadRank == 0) {
+                        insertionBase = ::atomicAdd(d_frontierBufferSize, numInsertions);
+                    }
 
-                // Leader thread reserves space for all threads in the warp
-                if (threadRank == 0) {
-                    insertionBase = ::atomicAdd(d_frontierBufferSize, numInsertions);
+                    // Shuffle insertion base
+                    insertionBase = ::__shfl_sync(activeMask, insertionBase, ::__ffs(static_cast<int>(activeMask)) - 1);
+
+                    // Insert in queue
+                    d_frontierBuffer[insertionBase + threadRank] = neighborIdx;
                 }
-
-                // Shuffle insertion base
-                insertionBase = ::__shfl_sync(activeMask, insertionBase, ::__ffs(static_cast<int>(activeMask)) - 1);
-
-                // Insert in queue
-                d_frontierBuffer[insertionBase + threadRank] = neighborIdx;
             }
         }
     }
@@ -593,7 +593,7 @@ namespace cuSGA {
         // Shared memory queue
         __shared__ nodeSize_t shared_queueSize;
         __shared__ nodeSize_t shared_queueBuffer[INS_SHARED_QUEUE_BUFFER_SIZE];
-        __shared__ nodeSize_t shared_globalInsertionBase;
+        __shared__ nodeSize_t shared_globalInsertionBase; // NOLINT
 
         // Get thread node index and check for thread overflow
         const auto nodeIdx{::blockIdx.x * ::blockDim.x + ::threadIdx.x};
@@ -633,38 +633,38 @@ namespace cuSGA {
                 // Get thread rank
                 const auto threadRank{::__popc(activeMask & ((1u << threadIdx.x) - 1))};
 
-                // Get number of insertions
-                const auto numInsertions{::__popc(activeMask)};
+                // Get number of insertions and check for insertions
+                if (const auto numInsertions{::__popc(activeMask)}; numInsertions > 0) {
+                    // Get insertion base
+                    nodeSize_t insertionBase{0};
 
-                // Get insertion base
-                nodeSize_t insertionBase{0};
-
-                // Leader thread reserves space for all threads in the warp
-                if (threadRank == 0) {
-                    insertionBase = ::atomicAdd(&shared_queueSize, numInsertions);
-                }
-
-                // Get leader lane index
-                const auto leaderLaneIdx{::__ffs(static_cast<int>(activeMask)) - 1};
-
-                // Shuffle insertion base
-                insertionBase = ::__shfl_sync(activeMask, insertionBase, leaderLaneIdx);
-
-                // Check for shared queue overflow and fall back to inserting directly in global queue if necessary
-                if (insertionBase + numInsertions > INS_SHARED_QUEUE_BUFFER_SIZE) {
                     // Leader thread reserves space for all threads in the warp
                     if (threadRank == 0) {
-                        insertionBase = ::atomicAdd(d_frontierBufferSize, numInsertions);
+                        insertionBase = ::atomicAdd(&shared_queueSize, numInsertions);
                     }
+
+                    // Get leader lane index
+                    const auto leaderLaneIdx{::__ffs(static_cast<int>(activeMask)) - 1};
 
                     // Shuffle insertion base
                     insertionBase = ::__shfl_sync(activeMask, insertionBase, leaderLaneIdx);
 
-                    // Insert in queue
-                    d_frontierBuffer[insertionBase + threadRank] = neighborIdx;
-                } else {
-                    // Insert in shared queue
-                    shared_queueBuffer[insertionBase + threadRank] = neighborIdx;
+                    // Check for shared queue overflow and fall back to inserting directly in global queue if necessary
+                    if (insertionBase + numInsertions > INS_SHARED_QUEUE_BUFFER_SIZE) {
+                        // Leader thread reserves space for all threads in the warp
+                        if (threadRank == 0) {
+                            insertionBase = ::atomicAdd(d_frontierBufferSize, numInsertions);
+                        }
+
+                        // Shuffle insertion base
+                        insertionBase = ::__shfl_sync(activeMask, insertionBase, leaderLaneIdx);
+
+                        // Insert in queue
+                        d_frontierBuffer[insertionBase + threadRank] = neighborIdx;
+                    } else {
+                        // Insert in shared queue
+                        shared_queueBuffer[insertionBase + threadRank] = neighborIdx;
+                    }
                 }
             }
         }
@@ -672,18 +672,21 @@ namespace cuSGA {
         // Synchronize block
         ::__syncthreads();
 
-        // Flush shared memory queue to global queue
-        if ((::threadIdx.x == 0) && (shared_queueSize > 0)) {
-            shared_globalInsertionBase = ::atomicAdd(d_frontierBufferSize, shared_queueSize);
-        }
+        // Flush shared memory queue to global queue if necessary
+        if (shared_queueSize > 0) {
+            // Update global queue size
+            if (::threadIdx.x == 0) {
+                shared_globalInsertionBase = ::atomicAdd(d_frontierBufferSize, shared_queueSize);
+            }
 
-        // Synchronize block
-        ::__syncthreads();
+            // Synchronize block
+            ::__syncthreads();
 
-        // Copy items from shared memory block queue to global queue buffer
-        const auto numToInsert{::min(shared_queueSize, INS_SHARED_QUEUE_BUFFER_SIZE)};
-        for (targetSize_t threadIdx{::threadIdx.x}; threadIdx < numToInsert; threadIdx += ::blockDim.x) {
-            d_frontierBuffer[shared_globalInsertionBase + threadIdx] = shared_queueBuffer[threadIdx]; // NOLINT
+            // Copy items from shared memory block queue to global queue buffer
+            const auto numToInsert{::min(shared_queueSize, INS_SHARED_QUEUE_BUFFER_SIZE)};
+            for (targetSize_t threadIdx{::threadIdx.x}; threadIdx < numToInsert; threadIdx += ::blockDim.x) {
+                d_frontierBuffer[shared_globalInsertionBase + threadIdx] = shared_queueBuffer[threadIdx]; // NOLINT
+            }
         }
     }
 
@@ -879,19 +882,22 @@ namespace cuSGA {
                         // Get active threads
                         const auto active{::cooperative_groups::coalesced_threads()};
 
-                        // Get insertion base
-                        nodeSize_t insertionBase{0};
+                        // Get number of insertions and check for insertions
+                        if (const auto numInsertions{active.size()}; numInsertions > 0) {
+                            // Get insertion base
+                            nodeSize_t insertionBase{0};
 
-                        // Leader thread reserves space for all threads in the warp
-                        if (active.thread_rank() == 0) {
-                            insertionBase = ::atomicAdd(queueSize, active.size());
+                            // Leader thread reserves space for all threads in the warp
+                            if (active.thread_rank() == 0) {
+                                insertionBase = ::atomicAdd(queueSize, numInsertions);
+                            }
+
+                            // Shuffle insertion base
+                            insertionBase = active.shfl(insertionBase, 0);
+
+                            // Insert in queue
+                            queueBuffer[insertionBase + active.thread_rank()] = neighborIdx;
                         }
-
-                        // Shuffle insertion base
-                        insertionBase = active.shfl(insertionBase, 0);
-
-                        // Insert in queue
-                        queueBuffer[insertionBase + active.thread_rank()] = neighborIdx;
                     }
                 }
             }
@@ -989,32 +995,35 @@ namespace cuSGA {
                         // Get active threads
                         const auto active{::cooperative_groups::coalesced_threads()};
 
-                        // Get insertion base
-                        nodeSize_t insertionBase{0};
+                        // Get number of insertions and check for insertions
+                        if (const auto numInsertions{active.size()}; numInsertions > 0) {
+                            // Get insertion base
+                            nodeSize_t insertionBase{0};
 
-                        // Leader thread reserves space for all threads in the warp
-                        if (active.thread_rank() == 0) {
-                            insertionBase = ::atomicAdd(&shared_queueSize, active.size());
-                        }
-
-                        // Shuffle insertion base
-                        insertionBase = active.shfl(insertionBase, 0);
-
-                        // Check for shared queue overflow and fall back to inserting directly in global queue if necessary
-                        if (insertionBase + active.size() > INS_SHARED_QUEUE_BUFFER_SIZE) {
                             // Leader thread reserves space for all threads in the warp
                             if (active.thread_rank() == 0) {
-                                insertionBase = ::atomicAdd(queueSize, active.size());
+                                insertionBase = ::atomicAdd(&shared_queueSize, numInsertions);
                             }
 
                             // Shuffle insertion base
                             insertionBase = active.shfl(insertionBase, 0);
 
-                            // Insert in queue
-                            queueBuffer[insertionBase + active.thread_rank()] = neighborIdx;
-                        } else {
-                            // Insert in shared queue
-                            shared_queueBuffer[insertionBase + active.thread_rank()] = neighborIdx;
+                            // Check for shared queue overflow and fall back to inserting directly in global queue if necessary
+                            if (insertionBase + numInsertions > INS_SHARED_QUEUE_BUFFER_SIZE) {
+                                // Leader thread reserves space for all threads in the warp
+                                if (active.thread_rank() == 0) {
+                                    insertionBase = ::atomicAdd(queueSize, numInsertions);
+                                }
+
+                                // Shuffle insertion base
+                                insertionBase = active.shfl(insertionBase, 0);
+
+                                // Insert in queue
+                                queueBuffer[insertionBase + active.thread_rank()] = neighborIdx;
+                            } else {
+                                // Insert in shared queue
+                                shared_queueBuffer[insertionBase + active.thread_rank()] = neighborIdx;
+                            }
                         }
                     }
                 }
@@ -1023,23 +1032,26 @@ namespace cuSGA {
             // Synchronize block
             cooperative_groups::thread_block::sync();
 
-            // Flush shared memory queue to global queue
-            if ((::threadIdx.x == 0) && (shared_queueSize > 0)) {
-                shared_globalInsertionBase = ::atomicAdd(queueSize, shared_queueSize);
-            }
+            // Flush shared memory queue to global queue if necessary
+            if (shared_queueSize > 0) {
+                // Flush shared memory queue to global queue
+                if (::threadIdx.x == 0) {
+                    shared_globalInsertionBase = ::atomicAdd(queueSize, shared_queueSize);
+                }
 
-            // Synchronize block
-            cooperative_groups::thread_block::sync();
+                // Synchronize block
+                cooperative_groups::thread_block::sync();
 
-            // Copy items from shared memory block queue to global queue buffer
-            const auto numToInsert{::min(shared_queueSize, INS_SHARED_QUEUE_BUFFER_SIZE)};
-            for (targetSize_t threadIdx{::threadIdx.x}; threadIdx < numToInsert; threadIdx += ::blockDim.x) {
-                queueBuffer[shared_globalInsertionBase + threadIdx] = shared_queueBuffer[threadIdx]; // NOLINT
-            }
+                // Copy items from shared memory block queue to global queue buffer
+                const auto numToInsert{::min(shared_queueSize, INS_SHARED_QUEUE_BUFFER_SIZE)};
+                for (targetSize_t threadIdx{::threadIdx.x}; threadIdx < numToInsert; threadIdx += ::blockDim.x) {
+                    queueBuffer[shared_globalInsertionBase + threadIdx] = shared_queueBuffer[threadIdx]; // NOLINT
+                }
 
-            // Reset queue size
-            if (::threadIdx.x == 0) {
-                shared_queueSize = 0;
+                // Reset queue size
+                if (::threadIdx.x == 0) {
+                    shared_queueSize = 0;
+                }
             }
 
             // Synchronize grid
