@@ -90,6 +90,7 @@ Some final conclusions and thoughts: **if more testing were to be done, analyzin
 * **CMake** (>=4.2).
 * **C++ Compiler** (with support for C++ >=20).
 * **NVCC** (with support for CUDA >=20).
+* **NVIDIA GPU** (with Compute Capability >=8).
 * [**CLI11**](https://github.com/CLIUtils/CLI11): A command line parser for C++11. 
 
 ***NOTE**: External Libraries are already handled by the CMake Build System itself. No additional libraries need to be installed manually.*
