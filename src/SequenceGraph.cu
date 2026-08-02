@@ -759,6 +759,14 @@ namespace cuSGA {
         auto* __restrict__ const d_queueBuffer2{d_queueBuffer1 + connectedComponentSize};
         auto* __restrict__ const shared_isInQueue{shared_isInQueueBase + warpIdx * packedQueueSize};
 
+        // Initialize sizes
+        if (laneIdx < 4) {
+            *(shared_queueSize1 + laneIdx) = 0;
+        }
+
+        // Synchronize warp
+        ::__syncwarp();
+
         // Perform insertions
         // Visit all neighbors of nodes in the current connected component (using stride access)
         for (auto connectedComponentIdx{connectedComponentStart + laneIdx}; connectedComponentIdx < connectedComponentEnd; connectedComponentIdx += KernelUtils::WARP_SIZE) {
