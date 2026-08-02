@@ -352,6 +352,7 @@ namespace cuSGA {
         nodeSize_t* d_frontierBufferSize1{nullptr};
         CUDA_CHECK(::cudaMallocAsync(&d_frontierBufferSize1, (2 + DoubleBuffer<nodeSize_t>::NUM_DOUBLE_BUFFERS * pangenomeGraph.getNumNodes()) * sizeof(nodeSize_t) + 2 * pangenomeGraph.getNumNodes() * sizeof(int), cudaStreamDefault));
         const auto d_frontierBufferSize2{d_frontierBufferSize1 + 1};
+        CUDA_CHECK(::cudaMemsetAsync(d_frontierBufferSize1, 0, 2 * sizeof(nodeSize_t), cudaStreamDefault));
         const auto d_frontierBuffer1{d_frontierBufferSize2 + 1};
         const auto d_frontierBuffer2{d_frontierBuffer1 + pangenomeGraph.getNumNodes()};
         const auto d_frontierQueue1{reinterpret_cast<int*>(d_frontierBuffer2 + pangenomeGraph.getNumNodes())};
@@ -431,6 +432,7 @@ namespace cuSGA {
         nodeSize_t* d_frontierBufferSize1{nullptr};
         CUDA_CHECK(::cudaMallocAsync(&d_frontierBufferSize1, (2 + DoubleBuffer<nodeSize_t>::NUM_DOUBLE_BUFFERS * pangenomeGraph.getNumNodes()) * sizeof(nodeSize_t) + 2 * pangenomeGraph.getNumNodes() * sizeof(int), cudaStreamDefault));
         const auto d_frontierBufferSize2{d_frontierBufferSize1 + 1};
+        CUDA_CHECK(::cudaMemsetAsync(d_frontierBufferSize1, 0, 2 * sizeof(nodeSize_t), cudaStreamDefault));
         const auto d_frontierBuffer1{d_frontierBufferSize2 + 1};
         const auto d_frontierBuffer2{d_frontierBuffer1 + pangenomeGraph.getNumNodes()};
         const auto d_frontierQueue1{reinterpret_cast<int*>(d_frontierBuffer2 + pangenomeGraph.getNumNodes())};
@@ -713,7 +715,7 @@ namespace cuSGA {
         //      |   sizes(nodeSize_t)   |  buffers (nodeSize_t)  |  isInQueue (queuePack_t)  |
         extern __shared__ nodeSize_t shared_sizesBase[];
         const auto shared_buffersBase{shared_sizesBase + (numWarpsPerBlock << 2)};
-        const auto shared_isInQueueBase{reinterpret_cast<queuePack_t*>(shared_buffersBase + numWarpsPerBlock * (SHARED_FRONTIER_BUFFER_SIZE << 1))};
+        const auto shared_isInQueueBase{reinterpret_cast<queuePack_t*>(shared_buffersBase + numWarpsPerBlock * (INS_SHARED_FRONTIER_BUFFER_SIZE << 1))};
 
         // Get thread warp ID and check for thread overflow
         const auto warpID{(::blockIdx.x * ::blockDim.x + ::threadIdx.x) >> KernelUtils::WARP_SHIFT};
@@ -749,18 +751,18 @@ namespace cuSGA {
         const auto warpIdx{::threadIdx.x >> KernelUtils::WARP_SHIFT};
 
         // Get frontier pointers
-        auto* __restrict__ const shared_queueSize1{shared_sizesBase + warpIdx * 4};
+        auto* __restrict__ const shared_queueSize1{shared_sizesBase + warpIdx * INS_NUM_SIZES};
         auto* __restrict__ const shared_queueSize2{shared_queueSize1 + 1};
         auto* __restrict__ const shared_deviceQueueSize1{shared_queueSize2 + 1};
         auto* __restrict__ const shared_deviceQueueSize2{shared_deviceQueueSize1 + 1};
-        auto* __restrict__ const shared_queueBuffer1{shared_buffersBase + ((warpIdx * SHARED_FRONTIER_BUFFER_SIZE) << 1)};
-        auto* __restrict__ const shared_queueBuffer2{shared_queueBuffer1 + SHARED_FRONTIER_BUFFER_SIZE};
+        auto* __restrict__ const shared_queueBuffer1{shared_buffersBase + ((warpIdx * INS_SHARED_FRONTIER_BUFFER_SIZE) << 1)};
+        auto* __restrict__ const shared_queueBuffer2{shared_queueBuffer1 + INS_SHARED_FRONTIER_BUFFER_SIZE};
         auto* __restrict__ const d_queueBuffer1{d_buffers + (connectedComponentStart << 1)};
         auto* __restrict__ const d_queueBuffer2{d_queueBuffer1 + connectedComponentSize};
         auto* __restrict__ const shared_isInQueue{shared_isInQueueBase + warpIdx * packedQueueSize};
 
         // Initialize sizes
-        if (laneIdx < 4) {
+        if (laneIdx < INS_NUM_SIZES) {
             *(shared_queueSize1 + laneIdx) = 0;
         }
 

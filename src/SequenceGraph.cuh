@@ -36,7 +36,8 @@ namespace cuSGA {
         __global__ void deletions(const cost_t* __restrict__ d_previousCosts, cost_t* __restrict__ d_currentCosts, nodeSize_t numNodes);
 
         // Insertions and propagations kernel
-        inline constexpr targetSize_t SHARED_FRONTIER_BUFFER_SIZE{KernelUtils::WARP_SIZE << 1};
+        inline constexpr ::uint8_t INS_NUM_SIZES{4};
+        inline constexpr targetSize_t INS_SHARED_FRONTIER_BUFFER_SIZE{KernelUtils::WARP_SIZE << 1};
         inline constexpr targetSize_t INS_SHARED_QUEUE_BUFFER_SIZE{((1 << 14) - 2) / sizeof(nodeSize_t)};
         __device__ __forceinline__ void processNeighbor(nodeSize_t* __restrict__ shared_queueBuffer, nodeSize_t* __restrict__ d_queueBuffer, nodeSize_t* __restrict__ shared_queueSize, nodeSize_t* __restrict__ shared_deviceQueueSize, queuePack_t* __restrict__ shared_isInQueue, cost_t* __restrict__ d_currentCosts, nodeSize_t neighborIdx, nodeSize_t neighborLocalIdx, cost_t updatedCurrentLayerNeighborCost);
         __device__ __forceinline__ void processNode(nodeSize_t* __restrict__ shared_queueBuffer, nodeSize_t* __restrict__ d_queueBuffer, nodeSize_t* __restrict__ shared_queueSize, nodeSize_t* __restrict__ shared_deviceQueueSize, queuePack_t* __restrict__ shared_isInQueue, cost_t* __restrict__ d_currentCosts, const edgeSize_t* __restrict__ d_neighborOffsets, const nodeSize_t* __restrict__ d_neighborValues, const connectedComponentSize_t* __restrict__ d_connectedComponentLocalIndexMappings, nodeSize_t nodeIdx);
@@ -343,7 +344,7 @@ namespace cuSGA {
                 // Get number of warps in the block
                 const auto numWarps{(blockSize + KernelUtils::WARP_SIZE - 1) >> KernelUtils::WARP_SHIFT};
 
-                return numWarps * (4 * sizeof(nodeSize_t) + DoubleBuffer<nodeSize_t>::NUM_DOUBLE_BUFFERS * SequenceGraphKernels::SHARED_FRONTIER_BUFFER_SIZE * sizeof(nodeSize_t) + ((maxConnectedComponentsSize + Frontier::PACKING_FACTOR - 1) >> Frontier::PACK_SHIFT) * sizeof(queuePack_t));
+                return numWarps * (SequenceGraphKernels::INS_NUM_SIZES * sizeof(nodeSize_t) + DoubleBuffer<nodeSize_t>::NUM_DOUBLE_BUFFERS * SequenceGraphKernels::INS_SHARED_FRONTIER_BUFFER_SIZE * sizeof(nodeSize_t) + ((maxConnectedComponentsSize + Frontier::PACKING_FACTOR - 1) >> Frontier::PACK_SHIFT) * sizeof(queuePack_t));
             };
 
             // Check if block size has already been computed for the given DNA base
@@ -501,7 +502,7 @@ namespace cuSGA {
         }
 
         // Grow queue size and check for shared queue overflow
-        if (const auto oldSharedQueueSize{::atomicAdd(shared_queueSize, 1)}; oldSharedQueueSize < SHARED_FRONTIER_BUFFER_SIZE) {
+        if (const auto oldSharedQueueSize{::atomicAdd(shared_queueSize, 1)}; oldSharedQueueSize < INS_SHARED_FRONTIER_BUFFER_SIZE) {
             // Insert in shared queue
             shared_queueBuffer[oldSharedQueueSize] = neighborIdx;
         }
