@@ -355,7 +355,7 @@ namespace cuSGA {
         const auto d_frontierBuffer1{d_frontierBufferSize2 + 1};
         const auto d_frontierBuffer2{d_frontierBuffer1 + pangenomeGraph.getNumNodes()};
         const auto d_frontierQueue1{reinterpret_cast<int*>(d_frontierBuffer2 + pangenomeGraph.getNumNodes())};
-        const auto d_frontierQueue2{reinterpret_cast<int*>(d_frontierBuffer2 + pangenomeGraph.getNumNodes())};
+        const auto d_frontierQueue2{d_frontierQueue1 + pangenomeGraph.getNumNodes()};
         CUDA_CHECK(::cudaMemsetAsync(d_frontierQueue1, 0, 2 * pangenomeGraph.getNumNodes() * sizeof(int), cudaStreamDefault));
 
         // Loop over all sequences in the input file
@@ -434,7 +434,7 @@ namespace cuSGA {
         const auto d_frontierBuffer1{d_frontierBufferSize2 + 1};
         const auto d_frontierBuffer2{d_frontierBuffer1 + pangenomeGraph.getNumNodes()};
         const auto d_frontierQueue1{reinterpret_cast<int*>(d_frontierBuffer2 + pangenomeGraph.getNumNodes())};
-        const auto d_frontierQueue2{reinterpret_cast<int*>(d_frontierBuffer2 + pangenomeGraph.getNumNodes())};
+        const auto d_frontierQueue2{d_frontierQueue1 + pangenomeGraph.getNumNodes()};
         CUDA_CHECK(::cudaMemsetAsync(d_frontierQueue1, 0, 2 * pangenomeGraph.getNumNodes() * sizeof(int), cudaStreamDefault));
 
         // Loop over all sequences in the input file
@@ -712,7 +712,7 @@ namespace cuSGA {
         // Shared memory, partitioned in the following way to guarantee alignment without wasting any space:
         //      |   sizes(nodeSize_t)   |  buffers (nodeSize_t)  |  isInQueue (queuePack_t)  |
         extern __shared__ nodeSize_t shared_sizesBase[];
-        const auto shared_buffersBase{shared_sizesBase + (numWarpsPerBlock << 1)};
+        const auto shared_buffersBase{shared_sizesBase + (numWarpsPerBlock << 2)};
         const auto shared_isInQueueBase{reinterpret_cast<queuePack_t*>(shared_buffersBase + numWarpsPerBlock * (SHARED_FRONTIER_BUFFER_SIZE << 1))};
 
         // Get thread warp ID and check for thread overflow
