@@ -19,14 +19,14 @@ int main(const int argc, const char* const argv[]) {
 
         // Align sequence to graph
         const ::cuSGA::cost_t* scores{};
-        if (parsedArguments.useCCAlignment) {
-            scores = sequenceGraph.connectedComponentsAlign(parsedArguments.sequenceFileName);
+        if (parsedArguments.useGlobalFrontier) {
+            scores = sequenceGraph.gridAlign(parsedArguments.sequenceFileName);
         }
         else if (parsedArguments.useBlockAggregation) {
             scores = sequenceGraph.gridBlockAggregationAlign(parsedArguments.sequenceFileName);
         }
         else {
-            scores = sequenceGraph.gridAlign(parsedArguments.sequenceFileName);
+            scores = sequenceGraph.connectedComponentsAlign(parsedArguments.sequenceFileName);
         }
 
         // Print results

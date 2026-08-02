@@ -38,9 +38,8 @@ namespace cuSGA {
         // Insertions and propagations kernel
         inline constexpr targetSize_t SHARED_FRONTIER_BUFFER_SIZE{KernelUtils::WARP_SIZE << 1};
         inline constexpr targetSize_t INS_SHARED_QUEUE_BUFFER_SIZE{((1 << 14) - 2) / sizeof(nodeSize_t)};
-        __device__ __forceinline__ void syncFrontierSizes(Frontier* __restrict__ shared_frontier, Frontier* __restrict__ warpFrontier, unsigned mask);
-        __device__ __forceinline__ void processNeighbor(Frontier* __restrict__ warpFrontier, Frontier* __restrict__ shared_frontier, cost_t* __restrict__ d_currentCosts, nodeSize_t neighborIdx, nodeSize_t neighborLocalIdx, cost_t updatedCurrentLayerNeighborCost);
-        __device__ __forceinline__ void processNode(nodeSize_t nodeIdx, Frontier* __restrict__ warpFrontier, Frontier* __restrict__ shared_frontier, const edgeSize_t* __restrict__ d_neighborOffsets, const nodeSize_t* __restrict__ d_neighborValues, const connectedComponentSize_t* __restrict__ d_connectedComponentLocalIndexMappings, cost_t* __restrict__ d_currentCosts);
+        __device__ __forceinline__ void processNeighbor(nodeSize_t* __restrict__ shared_queueBuffer, nodeSize_t* __restrict__ d_queueBuffer, nodeSize_t* __restrict__ shared_queueSize, nodeSize_t* __restrict__ shared_deviceQueueSize, queuePack_t* __restrict__ shared_isInQueue, cost_t* __restrict__ d_currentCosts, nodeSize_t neighborIdx, nodeSize_t neighborLocalIdx, cost_t updatedCurrentLayerNeighborCost);
+        __device__ __forceinline__ void processNode(nodeSize_t* __restrict__ shared_queueBuffer, nodeSize_t* __restrict__ d_queueBuffer, nodeSize_t* __restrict__ shared_queueSize, nodeSize_t* __restrict__ shared_deviceQueueSize, queuePack_t* __restrict__ shared_isInQueue, cost_t* __restrict__ d_currentCosts, const edgeSize_t* __restrict__ d_neighborOffsets, const nodeSize_t* __restrict__ d_neighborValues, const connectedComponentSize_t* __restrict__ d_connectedComponentLocalIndexMappings, nodeSize_t nodeIdx);
         __global__ void insertionsAndPropagations(const edgeSize_t* __restrict__ d_neighborOffsets, const nodeSize_t* __restrict__ d_neighborValues, const nodeSize_t* __restrict__ d_connectedComponentOffsets, const nodeSize_t* __restrict__ d_connectedComponentMappings, const connectedComponentSize_t* __restrict__ d_connectedComponentLocalIndexMappings, cost_t* __restrict__ d_currentCosts, nodeSize_t* __restrict__ d_buffers, bool* __restrict__ d_needsVisiting, targetSize_t numWarpsPerBlock, connectedComponentSize_t numConnectedComponents, connectedComponentSize_t maxConnectedComponentSize, bool earlyExit);
         __global__ void cooperativeInsertionsAndPropagations(const edgeSize_t* __restrict__ d_neighborOffsets, const nodeSize_t* __restrict__ d_neighborValues, cost_t* __restrict__ d_currentCosts, nodeSize_t* __restrict__ d_frontierBuffer1, nodeSize_t* __restrict__ d_frontierBuffer2, int* __restrict__ d_frontierQueue1, int* __restrict__ d_frontierQueue2, nodeSize_t* __restrict__ d_frontierBufferSize1, nodeSize_t* __restrict__ d_frontierBufferSize2, bool earlyExit);
         __global__ void cooperativeBlockAggregationInsertionsAndPropagations(const edgeSize_t* __restrict__ d_neighborOffsets, const nodeSize_t* __restrict__ d_neighborValues, cost_t* __restrict__ d_currentCosts, nodeSize_t* __restrict__ d_frontierBuffer1, nodeSize_t* __restrict__ d_frontierBuffer2, int* __restrict__ d_frontierQueue1, int* __restrict__ d_frontierQueue2, nodeSize_t* __restrict__ d_frontierBufferSize1, nodeSize_t* __restrict__ d_frontierBufferSize2, bool earlyExit);
@@ -485,63 +484,36 @@ namespace cuSGA {
     };
 
     // Insertions and propagations helper function
-    __device__ __forceinline__ void SequenceGraphKernels::syncFrontierSizes(Frontier* __restrict__ const shared_frontier, Frontier* __restrict__ const warpFrontier, const unsigned mask) {
-        shared_frontier->setQueueSize(::__reduce_max_sync(mask, shared_frontier->getQueueSize()));
-        warpFrontier->setQueueSize(::__reduce_max_sync(mask, warpFrontier->getQueueSize()));
-    }
-
-    // Insertions and propagations helper function
-    __device__ __forceinline__ void SequenceGraphKernels::processNeighbor(Frontier* __restrict__ const warpFrontier, Frontier* __restrict__ const shared_frontier, cost_t* __restrict__ const d_currentCosts, const nodeSize_t neighborIdx, const nodeSize_t neighborLocalIdx, const cost_t updatedCurrentLayerNeighborCost) {
-        // Set cost to atomic min and get previous current layer neighbor cost
+    __device__ __forceinline__ void SequenceGraphKernels::processNeighbor(nodeSize_t* __restrict__ const shared_queueBuffer, nodeSize_t* __restrict__ const d_queueBuffer, nodeSize_t* __restrict__ const shared_queueSize, nodeSize_t* __restrict__ const shared_deviceQueueSize, queuePack_t* __restrict__ const shared_isInQueue, cost_t* __restrict__ const d_currentCosts, const nodeSize_t neighborIdx, const nodeSize_t neighborLocalIdx, const cost_t updatedCurrentLayerNeighborCost) {
+        // Set cost to atomic min and get previous current layer neighbor cost and check for improvement
         // NOTE: Because in-degree for a node should be low, we can avoid doing warp / block level reduction in order to reduce overhead
-        const auto previousCurrentLayerNeighborCost{::atomicMin(d_currentCosts + neighborIdx, updatedCurrentLayerNeighborCost)};
-
-        // Check for improvement and that node index is node in the frontier already
-        bool wantsToInsert{(updatedCurrentLayerNeighborCost < previousCurrentLayerNeighborCost) && !shared_frontier->isNodeInQueue(neighborLocalIdx)};
-
-        // Get active mask
-        const auto activeMask{::__activemask()};
-
-        // Get matching mask
-        const unsigned matchingMask{::__match_any_sync(activeMask, neighborIdx)};
-
-        // Get wants to insert mask and deduplicate frontier queue insertions: only thread with lowest thread index inserts
-        if (const unsigned initialWantsToInsertMask{::__ballot_sync(activeMask, wantsToInsert)}; wantsToInsert && ((matchingMask & initialWantsToInsertMask & KernelUtils::lanemask_lt()) != 0)) {
-            wantsToInsert = false;
+        if (const auto previousCurrentLayerNeighborCost{::atomicMin(d_currentCosts + neighborIdx, updatedCurrentLayerNeighborCost)}; updatedCurrentLayerNeighborCost >= previousCurrentLayerNeighborCost) {
+            return;
         }
 
-        // Get updated wants to insert mask
-        const unsigned finalWantsToInsertMask{::__ballot_sync(activeMask, wantsToInsert)};
+        // Get pack index and bitmask
+        const auto chunkIdx = neighborLocalIdx >> Frontier::PACK_SHIFT;
+        const auto bitmask = Frontier::BITMASK << (neighborLocalIdx & (Frontier::PACKING_FACTOR - 1));
 
-        // Get number of insertions
-        const auto numInsertions{::__popc(finalWantsToInsertMask)};
+        // Perform atomic OR to set bit and check if node already present in the frontier
+        if (const auto oldMask{::atomicOr(shared_isInQueue + chunkIdx, bitmask)}; (oldMask & bitmask) != 0) {
+            return;
+        }
 
-        // Get old queue sizes
-        const auto oldSharedQueueSize{shared_frontier->getQueueSize()};
-        const auto oldWarpQueueSize{warpFrontier->getQueueSize()};
-
-        // Calculate updates distributions
-        const auto freeSharedSlots{SHARED_FRONTIER_BUFFER_SIZE - oldSharedQueueSize};
-        const auto numInsertionsInShared{::min(numInsertions, freeSharedSlots)};
-
-        // Grow queue sizes
-        shared_frontier->growQueueSize(numInsertionsInShared);
-        warpFrontier->growQueueSize(numInsertions - numInsertionsInShared);
-
-        // Get insertion offset and check if inserting in shared or global frontier
-        if (wantsToInsert) {
-            if (const auto insertionOffset{static_cast<nodeSize_t>(::__popc(finalWantsToInsertMask & KernelUtils::lanemask_lt()))}; insertionOffset < numInsertionsInShared) {
-                // Insert node into next shared frontier
-                shared_frontier->atomicInsertNodeInQueue(neighborIdx, neighborLocalIdx, oldSharedQueueSize + insertionOffset);
-            } else {
-                // Insert node into next global frontier
-                warpFrontier->atomicInsertNodeInQueue(neighborIdx, neighborLocalIdx, oldWarpQueueSize + (insertionOffset - numInsertionsInShared));
-            }
+        // Grow queue size and check for shared queue overflow
+        if (const auto oldSharedQueueSize{::atomicAdd(shared_queueSize, 1)}; oldSharedQueueSize < SHARED_FRONTIER_BUFFER_SIZE) {
+            // Insert in shared queue
+            shared_queueBuffer[oldSharedQueueSize] = neighborIdx;
+        }
+        else {
+            // Fallback to global queue
+            const auto oldGlobalQueueSize{::atomicAdd(shared_deviceQueueSize, 1)};
+            d_queueBuffer[oldGlobalQueueSize] = neighborIdx;
         }
     }
 
     // Insertions and propagations helper function
-    __device__ __forceinline__ void SequenceGraphKernels::processNode(const nodeSize_t nodeIdx, Frontier* __restrict__ const warpFrontier, Frontier* __restrict__ const shared_frontier, const edgeSize_t* __restrict__ const d_neighborOffsets, const nodeSize_t* __restrict__ const d_neighborValues, const connectedComponentSize_t* __restrict__ const d_connectedComponentLocalIndexMappings, cost_t* __restrict__ const d_currentCosts) {
+    __device__ __forceinline__ void SequenceGraphKernels::processNode(nodeSize_t* __restrict__ const shared_queueBuffer, nodeSize_t* __restrict__ const d_queueBuffer, nodeSize_t* __restrict__ const shared_queueSize, nodeSize_t* __restrict__ const shared_deviceQueueSize, queuePack_t* __restrict__ const shared_isInQueue, cost_t* __restrict__ const d_currentCosts, const edgeSize_t* __restrict__ const d_neighborOffsets, const nodeSize_t* __restrict__ const d_neighborValues, const connectedComponentSize_t* __restrict__ const d_connectedComponentLocalIndexMappings, const nodeSize_t nodeIdx) {
         // Get updated current layer neighbor cost
         const auto updatedCurrentLayerNeighborCost{d_currentCosts[nodeIdx] + SequenceGraph::INSERTION_COST};
 
@@ -554,11 +526,8 @@ namespace cuSGA {
             const auto neighborLocalIdx{d_connectedComponentLocalIndexMappings[neighborIdx]};
 
             // Process neighbor
-            processNeighbor(warpFrontier, shared_frontier, d_currentCosts, neighborIdx, neighborLocalIdx, updatedCurrentLayerNeighborCost);
+            processNeighbor(shared_queueBuffer, d_queueBuffer, shared_queueSize, shared_deviceQueueSize, shared_isInQueue, d_currentCosts, neighborIdx, neighborLocalIdx, updatedCurrentLayerNeighborCost);
         }
-
-        // Sync frontier sizes
-        syncFrontierSizes(shared_frontier, warpFrontier, ::__activemask());
     }
 } // cuSGA
 

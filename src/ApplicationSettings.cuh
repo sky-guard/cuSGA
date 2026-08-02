@@ -28,8 +28,8 @@ namespace cuSGA::ApplicationSettings {
     inline constexpr ::std::string CONNECTED_COMPONENTS_FILE_NAME_SUFFIXES[]{"-components-A", "-components-C", "-components-G", "-components-T"};
 
     // Alignment version
-    inline constexpr auto USE_CC_ALIGNMENT_FLAG{"--cc-align"};
-    inline constexpr auto USE_CC_ALIGNMENT_FLAG_DESCRIPTION{"The Alignment Algorithm type to use: Grid level (DEFAULT) or Connected Components level (enabled by setting this flag). Grid level Alignment is in general more performant. Connected Components level Alignment might outperform it for very large Graphs."};
+    inline constexpr auto USE_GLOBAL_FRONTIER_FLAG{"--global-frontier"};
+    inline constexpr auto USE_GLOBAL_FRONTIER_FLAG_DESCRIPTION{"The Alignment Algorithm type to use: Connected Components level (DEFAULT) or Grid level (enabled by setting this flag). Grid level Alignment is in general more consistent, as it doesn't rely on Connected Components. Connected Components level Alignment, however, appears to be slightly more performant."};
     inline constexpr auto USE_BLOCK_AGGREGATION_FLAG{"--block-aggregation"};
     inline constexpr auto USE_BLOCK_AGGREGATION_FLAG_DESCRIPTION{"Enable Block Aggregation for the Grid level Alignment Algorithm. This is recommended to boost performance if the Graph Size is very big."};
 
@@ -38,7 +38,7 @@ namespace cuSGA::ApplicationSettings {
         ::std::string sequenceFileName{};
         ::std::string pangenomeGraphFileName{};
         ::std::string connectedComponentsFileNames[NUM_BASES]{};
-        bool useCCAlignment{false};
+        bool useGlobalFrontier{false};
         bool useBlockAggregation{false};
     };
 
@@ -58,7 +58,7 @@ namespace cuSGA::ApplicationSettings {
         // Configure application arguments
         app.add_option(SEQUENCE_FILE_NAME_FLAG, parsedArguments.sequenceFileName, SEQUENCE_FILE_NAME_DESCRIPTION)->required();
         app.add_option(PANGENOME_GRAPH_FILE_NAME_FLAG, parsedArguments.pangenomeGraphFileName, PANGENOME_GRAPH_FILE_NAME_DESCRIPTION)->required();
-        app.add_flag(USE_CC_ALIGNMENT_FLAG, parsedArguments.useCCAlignment, USE_CC_ALIGNMENT_FLAG_DESCRIPTION);
+        app.add_flag(USE_GLOBAL_FRONTIER_FLAG, parsedArguments.useGlobalFrontier, USE_GLOBAL_FRONTIER_FLAG_DESCRIPTION);
         app.add_flag(USE_BLOCK_AGGREGATION_FLAG, parsedArguments.useBlockAggregation, USE_BLOCK_AGGREGATION_FLAG_DESCRIPTION);
         const auto connectedComponentsFileNamesOption{app.add_option(CONNECTED_COMPONENTS_FILE_NAMES_FLAG, connectedComponentsFileNamesVector, CONNECTED_COMPONENTS_FILE_NAMES_DESCRIPTION)->expected(1, NUM_BASES)};
 

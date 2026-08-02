@@ -22,6 +22,9 @@ Both of these problems stemmed from the fact that **performing an exploration ov
 Thus, **I made the decision to map one Warp per Connected Component and perform the same BFS-like exploration as before, but at a per Connected Component level**. This is because **mapping one Thread per Connected Component would have been too costly** for a few different reasons:
 
 * **Inability to exploit parallelism inside the exploration of the single Connected Component**, whose size, according to the research, could be up to 1500 - 2000 Nodes, which is plenty for parallelism to be exploited.
+  
+  ***NOTE**: Informal testing revealed that since the number of insertions that can be propagated in parallel inside a single Connected Component is so small, a single Warp per Connected Component could already be considered overkill. More on this later: [Performance & Results](#performance--results).*
+
 
 * **Thread Divergence and Uncoalesced Memory Accesses across Threads of the same Warp**, due to varying Connected Component sizes and how Connected Components data is stored in memory and meant to be accessed. 
 
@@ -47,6 +50,8 @@ It would take me far too long to list all the possible optimizations and areas o
 
 * **Loop Unrolling and Function Inlining**, to help squeeze as much performance as possible from the compiler, keeping an eye on Register Occupancy in order to avoid Local Memory Spilling.
 
+* **Warp and Block level Reduction Operations**, to coordinate Threads in their work and minimize Global Memory Contention. 
+
 Lastly, a final round of profiling through NSight Systems and NSight Compute showed that the situation improved significantly. **The remaining bottlenecks identified by the profiler are the following**:
 
 * **Device Utilization**.
@@ -63,13 +68,11 @@ Lastly, a final round of profiling through NSight Systems and NSight Compute sho
 
 One final parallelization attempt was made, this time **going back to the original idea of a Grid level Synchronous exploration**. In fact, the original implementation turned out to be quite lucklaster not exactly because it was a bad idea, but in fact becasue it could have been implemented way better: instead of launching one Kernel per level of the exploration and transferring Frontier data back and forth from Device to Host, **the same idea could have been implemented using Cooperative Groups, thus resolving both of the aformentioned issues**. 
 
-This idea was also sparked by the following realization about the original ParSGA Algorithm: **it is possible to determine at Substitutions time exactly which Nodes / Connected Components will need to be visited in the following Insertions phase**. In fact, **a Node needs to be visited for Insertions / Propagations only if there is an improvement at Substitutions time!** This information can then be used in order to avoid a full scan of the Graph at the start of the Insertions phase to find the initial Frontier.
+This idea was also sparked by the following realization about the original ParSGA Algorithm: **it is possible to determine at Substitutions time exactly which Nodes / Connected Components will need to be visited in the following Insertions phase**. In fact, **a Node needs to be visited for Insertions / Propagations only if there is an improvement at Substitutions time!** This information can then be used in order to avoid a full scan of the Graph at the start of the Insertions phase to find the initial Frontier. The same idea also obviously can be applied to the Connected Components level Synchronization version of the Algorithm, although with diminishing returns as opposed to the Grid level Synchronization version.
 
-The same idea also obviously can be applied to the Connected Components level Synchronization version of the Algorithm, although with diminishing returns as opposed to the Grid level Synchronization version, which in fact turned out to be the **most successful parallelization attempt, as well as the most consistent, since it doesn't rely on Connected Components at all.** 
+Thus, **I propose this revised version of the Algorithm as a revision of the ParSGA Algorithm**. **Although slightly less performant with Graph Sizes this small, this version of the Algorithm could prove to be equally performant as the ParSGA version (if not more) given the Input Size were orders of magnitude larger**. More testing would have to be done to find out the answer.
 
-Thus, **I propose this revised version of the Algorithm as the one to be used (by default) by cuSGA**. **Could this be a definitive improvement over the original ParSGA Algorithm, even in a CPU-only runtime scenario?** More testing would have to be done against an OpenMP implementation of the same Algorithm to find out the answer.
-
-Finally, let's review the results and bottlenecks identified by NSight Systems and NSight Compute:
+Finally, let's review the results and bottlenecks identified by NSight Systems and NSight Compute for this alternative version of the Algorithm:
 
 * **Excessive Stalling and Low Active Threads Occupancy**.
 
@@ -128,17 +131,17 @@ First, navigate to the build directory (or where your executable is located):
 cd build
 ```
 
-To align a sequence using **Grid level Synchronization with Cooperative Groups (DEFAULT)** and print the resulting Alignment Scores, please run the following command:
+To align a sequence using **Connected Components level Synchronization (DEFAULT)** and print the resulting Alignment Scores, please run the following command:
 ```bash
 ./cuSGA -s SEQUENCE_FILE -p PANGENOME_GRAPH_FILE -c CONNECTED_COMPONENTS_FILE_PREFIX
 ```
 
-***NOTE**: **For very large Graphs, it is recommended to pass the ```--block-aggregation``` flag** to enable a variant of the Grid level Synchronization Kernel that additionally also makes use of Block Aggregation (on top of the already existing Warp Aggregation). This is to further improve Scalability by focusing on minimizing the concurrent atomic writes on the Global Queue Size, which is expected to become more and more of a limiting factor for performance as the input size grows. **For smaller graphs, such as the one used during testing, performance loss appears to be minimal (10.8x speedup vs 11.2x speedup).***
-
-To align a sequence using **Connected Components level Synchronization (NOT RECOMMENDED)** and print the resulting Alignment Scores, please run the following command:
+To align a sequence using **Grid level Synchronization with Cooperative Groups** and print the resulting Alignment Scores, please run the following command:
 ```bash
-./cuSGA --cc-align -s SEQUENCE_FILE -p PANGENOME_GRAPH_FILE -c CONNECTED_COMPONENTS_FILE_PREFIX
+./cuSGA --global-frontier -s SEQUENCE_FILE -p PANGENOME_GRAPH_FILE -c CONNECTED_COMPONENTS_FILE_PREFIX
 ```
+
+***NOTE**: **For very large Graphs, it is recommended to pass the ```--block-aggregation``` flag** to enable a variant of the Grid level Synchronization Kernel that additionally also makes use of Block Aggregation (on top of the already existing Warp Aggregation). This is to further improve Scalability by focusing on minimizing the concurrent atomic writes on the Global Queue Size, which is expected to become more and more of a limiting factor for performance as the input size grows. **For smaller graphs, such as the one used during testing, performance loss appears to be minimal (10.0x speedup vs 10.5x speedup).***
 
 ***NOTE**: For additional information regarding the expected files and their formats, please read [Input File Formats](#input-file-formats).*
 
@@ -198,22 +201,22 @@ cuSGA expects the following Input Files:
 
 The following results were obtained testing the alignment of 100 Sequences, each one of length ~10k, to the Pangenome Graph of Salmonella, which consists roughly of ~10k nodes / edges, using a variety of Connected Component sizes:
 
-| Implementation | Platform                            | Execution Time    | Speedup          | Time Reduction  |
-|:---------------|:------------------------------------|:------------------|:-----------------|:----------------|
-| **ParSGA**     | OpenMP (Ryzen 9 6900HS, 8 cores)    | 95s               | 1.0x             | 0%              |
-| **cuSGA**      | CUDA (NVIDIA RTX 3080 Mobile)       | **120.2s - 8.5s** | **0.8x - 11.2x** | **+26% - -91%** |
+| Implementation | Platform                            | Execution Time  | Speedup           | Time Reduction |
+|:---------------|:------------------------------------|:----------------|:------------------|:---------------|
+| **ParSGA**     | OpenMP (Ryzen 9 6900HS, 8 cores)    | 95s             | 1.0x              | 0%             |
+| **cuSGA**      | CUDA (NVIDIA RTX 3080 Mobile)       | **9.5s - 6.5s** | **10.0x - 14.6x** | **90% - 93%**  |
 
 **These results should however be taken with a grain of salt and are not entirely reflective of what the current implementation could be able to achieve!** 
 
 In fact, there were a few critical problems that occurred during testing:
 
-* **The current input size was nowhere near large enough to achieve full SM occupancy**. The **0.8x speedup** was achieved under the very unfavorable case of **Connected Components level Synchronization** with scheduling **only a single block**, while the **11.2x speedup** was achieved by using **Grid level Synchronization**, which proved to be **more consistent (since it doesn't make use of Connected Components at all)** but still **Active Thread Occupancy proved to be extremely poor due to the minuscule amount of Insertions that needed propagation**. Therefore, if the input size were big enough to saturate all SMs, **cuSGA could theoretically achieve numbers that are much higher than this**, assuming Memory Bandwidth doesn't become the limiting factor. Using some maths and profiling, it was possible for me to deduce that in order to schedule at least one block per SM (according to my hardware), the input size would have to be orders of magnitude larger than the one that was used in the current testing:
+* **The current input size was nowhere near large enough to achieve full SM occupancy**. The **14.6x speedup** was achieved under the very unfavorable case of **Connected Components level Synchronization** with scheduling **only a single block**, while the **10.0x speedup** was achieved by using **Grid level Synchronization (with Block Reduction enabled, not useful for a Graph Size this small)**, which proved to be **more consistent (since it doesn't make use of Connected Components at all)**... but still **Active Thread Occupancy proved to be extremely poor due to the minuscule amount of Insertions that needed propagation**. Therefore, if the input size were big enough to saturate all SMs, **cuSGA could theoretically achieve numbers that are much higher than this**, assuming Memory Bandwidth doesn't become the limiting factor. Using some maths and profiling, it was possible for me to deduce that in order to schedule at least one block per SM (according to my hardware), the input size would have to be orders of magnitude larger than the one that was used in the current testing:
 
   ```
   REALISTIC_CC_SIZE(~=1000) * NUMBER_OF_WARPS_PER_BLOCK(=48) * NUMBER_OF_SM(=48) ~= 750k Nodes
   ```
 
-* **The Connected Components of varying size were simulated by grouping together smaller Components, meaning that the components generated were composed roughly of the same number of nodes**. **However, this is not guaranteed to be the case with real data!** Further testing using actual data should be done, as this could be a **limiting factor for the theoretical peak performance of the Connected Components level Synchronization Algorithm**: if the Connected Component Sizes were highly irregular, some Warps could end up taking a lot longer to complete their work compared to other Warps in the same Block, hogging hardware resources until the whole Block finishes its computation. **The Grid level Synchronization Algorithm on the other hand, would remain completely unaffected, thus possibly offering better scalability, especially in the case of big Graphs!.**
+* **The Connected Components of varying size were simulated by grouping together smaller Components, meaning that the components generated were composed roughly of the same number of nodes**. **However, this is not guaranteed to be the case with real data!** Further testing using actual data should be done, as this could be a **limiting factor for the theoretical peak performance of the Connected Components level Synchronization Algorithm**: if the Connected Component Sizes were highly irregular, some Warps could end up taking a lot longer to complete their work compared to other Warps in the same Block, hogging hardware resources until the whole Block finishes its computation. **The Grid level Synchronization Algorithm on the other hand, would remain completely unaffected, thus possibly offering better scalability in the case of big Graphs.**
 
 ---
 

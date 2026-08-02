@@ -116,13 +116,6 @@ namespace cuSGA {
         __host__ __device__ __forceinline__ void insertInQueue(const nodeSize_t nodeIdx, const nodeSize_t queueIdx) const {
             // Update double buffer
             doubleBuffer.alternate()[queueIdx] = nodeIdx;
-
-            // Get pack index and bitmask
-            const auto chunkIdx = nodeIdx >> PACK_SHIFT;
-            const auto bitmask = BITMASK << (nodeIdx & (PACKING_FACTOR - 1));
-
-            // Perform OR to set the bit
-            isInQueue[chunkIdx] |= bitmask;
         }
 
         // Atomically insert a node into the current frontier queue
@@ -136,6 +129,20 @@ namespace cuSGA {
 
             // Perform atomic OR to set bit
             ::atomicOr(isInQueue + chunkIdx, bitmask);
+        }
+
+        // Atomically check if node is in queue and insert if not
+        __device__ __forceinline__ bool atomicExchangeInQueue(const nodeSize_t nodeLocalIdx) const {
+            // Get pack index and bitmask
+            const auto chunkIdx = nodeLocalIdx >> PACK_SHIFT;
+            const auto bitmask = BITMASK << (nodeLocalIdx & (PACKING_FACTOR - 1));
+
+            // Perform atomic OR to set bit
+            const auto oldMask{::atomicOr(isInQueue + chunkIdx, bitmask)};
+
+            const auto alreadyPresent{(oldMask & bitmask) != 0};
+
+            return alreadyPresent;
         }
 
         // Swap from queue to next frontier

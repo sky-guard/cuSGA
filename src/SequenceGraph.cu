@@ -567,7 +567,7 @@ namespace cuSGA {
                 const auto activeMask{::__activemask()};
 
                 // Get thread rank
-                const auto threadRank{::__popc(activeMask & ((1u << threadIdx.x) - 1))};
+                const auto threadRank{::__popc(activeMask & ((1u << ::threadIdx.x) - 1))};
 
                 // Get number of insertions and check for insertions
                 if (const auto numInsertions{::__popc(activeMask)}; numInsertions > 0) {
@@ -631,7 +631,7 @@ namespace cuSGA {
                 const auto activeMask{::__activemask()};
 
                 // Get thread rank
-                const auto threadRank{::__popc(activeMask & ((1u << threadIdx.x) - 1))};
+                const auto threadRank{::__popc(activeMask & ((1u << ::threadIdx.x) - 1))};
 
                 // Get number of insertions and check for insertions
                 if (const auto numInsertions{::__popc(activeMask)}; numInsertions > 0) {
@@ -710,13 +710,27 @@ namespace cuSGA {
 
     __global__ void SequenceGraphKernels::insertionsAndPropagations(const edgeSize_t* __restrict__ const d_neighborOffsets, const nodeSize_t* __restrict__ const d_neighborValues, const nodeSize_t* __restrict__ const d_connectedComponentOffsets, const nodeSize_t* __restrict__ const d_connectedComponentMappings, const connectedComponentSize_t* __restrict__ const d_connectedComponentLocalIndexMappings, cost_t* __restrict__ const d_currentCosts, nodeSize_t* __restrict__ const d_buffers, bool* __restrict__ const d_needsVisiting, const targetSize_t numWarpsPerBlock, const connectedComponentSize_t numConnectedComponents, const connectedComponentSize_t maxConnectedComponentSize, const bool earlyExit) {
         // Shared memory, partitioned in the following way to guarantee alignment without wasting any space:
-        //      |  buffers (nodeSize_t)  |  isInQueue (bool)  |
-        extern __shared__ nodeSize_t shared_buffers[];
-        const auto shared_isInQueue{reinterpret_cast<queuePack_t*>(shared_buffers + numWarpsPerBlock * (SHARED_FRONTIER_BUFFER_SIZE << 1))};
+        //      |   sizes(nodeSize_t)   |  buffers (nodeSize_t)  |  isInQueue (queuePack_t)  |
+        extern __shared__ nodeSize_t shared_sizesBase[];
+        const auto shared_buffersBase{shared_sizesBase + (numWarpsPerBlock << 1)};
+        const auto shared_isInQueueBase{reinterpret_cast<queuePack_t*>(shared_buffersBase + numWarpsPerBlock * (SHARED_FRONTIER_BUFFER_SIZE << 1))};
 
         // Get thread warp ID and check for thread overflow
         const auto warpID{(::blockIdx.x * ::blockDim.x + ::threadIdx.x) >> KernelUtils::WARP_SHIFT};
         if (warpID >= numConnectedComponents) {
+            return;
+        }
+
+        // Get lane index
+        const auto laneIdx{::threadIdx.x & (KernelUtils::WARP_SIZE - 1)};
+
+        // Clear needs visiting flag
+        if (laneIdx == 0) {
+            d_needsVisiting[warpID] = false;
+        }
+
+        // Return early if early exit
+        if (earlyExit) {
             return;
         }
 
@@ -734,29 +748,16 @@ namespace cuSGA {
         // Get warp index
         const auto warpIdx{::threadIdx.x >> KernelUtils::WARP_SHIFT};
 
-        // Get warp frontier
-        const auto d_buffersBase{d_buffers + (connectedComponentStart << 1)};
-        const DoubleBuffer warpDoubleBuffer{connectedComponentSize, d_buffersBase, d_buffersBase + connectedComponentSize, 0, false};
-        const auto shared_isInQueueBase{shared_isInQueue + warpIdx * packedQueueSize};
-        Frontier warpFrontier{0, 0, warpDoubleBuffer, shared_isInQueueBase};
-
-        // Get shared frontier
-        const auto shared_buffersBase{shared_buffers + ((warpIdx * SHARED_FRONTIER_BUFFER_SIZE) << 1)};
-        const DoubleBuffer shared_doubleBuffer{SHARED_FRONTIER_BUFFER_SIZE, shared_buffersBase, shared_buffersBase + SHARED_FRONTIER_BUFFER_SIZE, 0, false};
-        Frontier shared_frontier{0, 0, shared_doubleBuffer, shared_isInQueueBase};
-
-        // Get lane index
-        const auto laneIdx{::threadIdx.x & (KernelUtils::WARP_SIZE - 1)};
-
-        // Clear needs visiting flag
-        if (laneIdx == 0) {
-            d_needsVisiting[warpID] = false;
-        }
-
-        // Return early if early exit
-        if (earlyExit) {
-            return;
-        }
+        // Get frontier pointers
+        auto* __restrict__ const shared_queueSize1{shared_sizesBase + warpIdx * 4};
+        auto* __restrict__ const shared_queueSize2{shared_queueSize1 + 1};
+        auto* __restrict__ const shared_deviceQueueSize1{shared_queueSize2 + 1};
+        auto* __restrict__ const shared_deviceQueueSize2{shared_deviceQueueSize1 + 1};
+        auto* __restrict__ const shared_queueBuffer1{shared_buffersBase + ((warpIdx * SHARED_FRONTIER_BUFFER_SIZE) << 1)};
+        auto* __restrict__ const shared_queueBuffer2{shared_queueBuffer1 + SHARED_FRONTIER_BUFFER_SIZE};
+        auto* __restrict__ const d_queueBuffer1{d_buffers + (connectedComponentStart << 1)};
+        auto* __restrict__ const d_queueBuffer2{d_queueBuffer1 + connectedComponentSize};
+        auto* __restrict__ const shared_isInQueue{shared_isInQueueBase + warpIdx * packedQueueSize};
 
         // Perform insertions
         // Visit all neighbors of nodes in the current connected component (using stride access)
@@ -765,58 +766,76 @@ namespace cuSGA {
             const auto nodeIdx{d_connectedComponentMappings[connectedComponentIdx]};
 
             // Process node
-            processNode(nodeIdx, &warpFrontier, &shared_frontier, d_neighborOffsets, d_neighborValues, d_connectedComponentLocalIndexMappings, d_currentCosts);
+            processNode(shared_queueBuffer1, d_queueBuffer1, shared_queueSize1, shared_deviceQueueSize1, shared_isInQueue, d_currentCosts, d_neighborOffsets, d_neighborValues, d_connectedComponentLocalIndexMappings, nodeIdx);
         }
 
-        // Sync frontier sizes
-        shared_frontier.setQueueSize(::__shfl_sync(KernelUtils::BROADCAST_SHUFFLE_MASK, shared_frontier.getQueueSize(), 0));
-        warpFrontier.setQueueSize(::__shfl_sync(KernelUtils::BROADCAST_SHUFFLE_MASK, warpFrontier.getQueueSize(), 0));
-
-        // Swap frontier
-        shared_frontier.swap();
-        warpFrontier.swap();
+        // Get selector
+        bool selector{true};
 
         // Perform propagations
-        while (!(shared_frontier.isEmpty() && warpFrontier.isEmpty())) {
-            // Empty frontier queue if necessary
-            const auto shared_queue{shared_frontier.getIsInQueue()};
-            for (nodeSize_t queuePackIdx{laneIdx}; queuePackIdx < packedQueueSize; queuePackIdx += KernelUtils::WARP_SIZE) {
-                shared_queue[queuePackIdx] = 0;
+        while (true) {
+            // Get frontier size
+            const auto sharedFrontierSize{(selector)? *shared_queueSize1 : *shared_queueSize2};
+            const auto deviceFrontierSize{(selector)? *shared_deviceQueueSize1 : *shared_deviceQueueSize2};
+
+            // Check if frontiers are empty
+            if ((sharedFrontierSize == 0) && (deviceFrontierSize == 0)) {
+                break;
             }
+
+            // Empty frontier queue if necessary
+            for (nodeSize_t queuePackIdx{laneIdx}; queuePackIdx < packedQueueSize; queuePackIdx += KernelUtils::WARP_SIZE) {
+                shared_isInQueue[queuePackIdx] = 0;
+            }
+
+            // Get frontier buffers
+            const auto* __restrict__ const shared_frontierBuffer{(selector)? shared_queueBuffer1 : shared_queueBuffer2};
+            const auto* __restrict__ const d_frontierBuffer{(selector)? d_queueBuffer1 : d_queueBuffer2};
+
+            // Get queue buffers
+            auto* __restrict__ const shared_queueBuffer{(selector)? shared_queueBuffer2 : shared_queueBuffer1};
+            auto* __restrict__ const d_queueBuffer{(selector)? d_queueBuffer2 : d_queueBuffer1};
+
+            // Get queue sizes
+            auto* __restrict__ const shared_queueSize{(selector)? shared_queueSize2 : shared_queueSize1};
+            auto* __restrict__ const shared_deviceQueueSize{(selector)? shared_deviceQueueSize2 : shared_deviceQueueSize1};
 
             // Visit all neighbors of nodes in the current shared frontier (using stride access)
-            const auto sharedFrontierSize{shared_frontier.getSize()};
-            const auto* __restrict__ const sharedFrontierValues{shared_frontier.getValues()};
             for (nodeSize_t frontierIdx{laneIdx}; frontierIdx < sharedFrontierSize; frontierIdx += KernelUtils::WARP_SIZE) {
                 // Get node index
-                const auto nodeIdx{sharedFrontierValues[frontierIdx]};
+                const auto nodeIdx{shared_frontierBuffer[frontierIdx]};
 
                 // Process node
-                processNode(nodeIdx, &warpFrontier, &shared_frontier, d_neighborOffsets, d_neighborValues, d_connectedComponentLocalIndexMappings, d_currentCosts);
+                processNode(shared_queueBuffer, d_queueBuffer, shared_queueSize, shared_deviceQueueSize, shared_isInQueue, d_currentCosts, d_neighborOffsets, d_neighborValues, d_connectedComponentLocalIndexMappings, nodeIdx);
             }
-
-            // Sync frontier sizes
-            shared_frontier.setQueueSize(::__shfl_sync(KernelUtils::BROADCAST_SHUFFLE_MASK, shared_frontier.getQueueSize(), 0));
-            warpFrontier.setQueueSize(::__shfl_sync(KernelUtils::BROADCAST_SHUFFLE_MASK, warpFrontier.getQueueSize(), 0));
 
             // Visit all neighbors of nodes in the current global frontier (using stride access)
-            const auto warpFrontierSize{warpFrontier.getSize()};
-            const auto* __restrict__ const warpFrontierValues{warpFrontier.getValues()};
-            for (nodeSize_t frontierIdx{laneIdx}; frontierIdx < warpFrontierSize; frontierIdx += KernelUtils::WARP_SIZE) {
+            for (nodeSize_t frontierIdx{laneIdx}; frontierIdx < deviceFrontierSize; frontierIdx += KernelUtils::WARP_SIZE) {
                 // Get node index
-                const auto nodeIdx{warpFrontierValues[frontierIdx]};
+                const auto nodeIdx{d_frontierBuffer[frontierIdx]};
 
                 // Process node
-                processNode(nodeIdx, &warpFrontier, &shared_frontier, d_neighborOffsets, d_neighborValues, d_connectedComponentLocalIndexMappings, d_currentCosts);
+                processNode(shared_queueBuffer, d_queueBuffer, shared_queueSize, shared_deviceQueueSize, shared_isInQueue, d_currentCosts, d_neighborOffsets, d_neighborValues, d_connectedComponentLocalIndexMappings, nodeIdx);
             }
 
-            // Sync frontier sizes
-            shared_frontier.setQueueSize(::__shfl_sync(KernelUtils::BROADCAST_SHUFFLE_MASK, shared_frontier.getQueueSize(), 0));
-            warpFrontier.setQueueSize(::__shfl_sync(KernelUtils::BROADCAST_SHUFFLE_MASK, warpFrontier.getQueueSize(), 0));
+            // Synchronize warp
+            ::__syncwarp();
 
-            // Swap frontier
-            shared_frontier.swap();
-            warpFrontier.swap();
+            // Flush current size
+            if (laneIdx == 0) {
+                if (selector) {
+                    *shared_queueSize1 = 0;
+                }
+                else {
+                    *shared_queueSize2 = 0;
+                }
+            }
+
+            // Swap selector
+            selector = !selector;
+
+            // Synchronize warp
+            ::__syncwarp();
         }
     }
 
@@ -917,6 +936,9 @@ namespace cuSGA {
 
             // Swap selector
             selector = !selector;
+
+            // Synchronize grid
+            grid.sync();
         }
     }
 
@@ -1069,6 +1091,9 @@ namespace cuSGA {
 
             // Swap selector
             selector = !selector;
+
+            // Synchronize grid
+            grid.sync();
         }
     }
 
