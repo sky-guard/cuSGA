@@ -857,12 +857,12 @@ namespace cuSGA {
             ::__syncwarp();
 
             // Flush current size
-            if (laneIdx == 0) {
+            if (laneIdx < 2) {
                 if (selector) {
-                    *shared_queueSize1 = 0;
+                    *(shared_queueSize1 + 2 * laneIdx) = 0;
                 }
                 else {
-                    *shared_queueSize2 = 0;
+                    *(shared_queueSize2 + 2 * laneIdx) = 0;
                 }
             }
 
