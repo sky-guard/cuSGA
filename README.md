@@ -141,7 +141,7 @@ To align a sequence using **Grid level Synchronization with Cooperative Groups**
 ./cuSGA --global-frontier -s SEQUENCE_FILE -p PANGENOME_GRAPH_FILE -c CONNECTED_COMPONENTS_FILE_PREFIX
 ```
 
-***NOTE**: **For very large Graphs, it is recommended to pass the ```--block-aggregation``` flag** to enable a variant of the Grid level Synchronization Kernel that additionally also makes use of Block Aggregation (on top of the already existing Warp Aggregation). This is to further improve Scalability by focusing on minimizing the concurrent atomic writes on the Global Queue Size, which is expected to become more and more of a limiting factor for performance as the input size grows. **For smaller graphs, such as the one used during testing, performance loss appears to be minimal (10.0x speedup vs 10.5x speedup).***
+***NOTE**: **For very large Graphs, it is recommended to pass the ```--block-aggregation``` flag instead**. This will enable a variant of the Grid level Synchronization Kernel that additionally also makes use of Block Aggregation (on top of the already existing Warp Aggregation) in order to further improve Scalability by focusing on minimizing the concurrent atomic writes on the Global Queue Size, which is expected to become more and more of a limiting factor for performance as the input size grows. **For smaller graphs, such as the one used during testing, performance loss appears to be negligible.***
 
 ***NOTE**: For additional information regarding the expected files and their formats, please read [Input File Formats](#input-file-formats).*
 

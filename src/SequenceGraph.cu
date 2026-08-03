@@ -349,11 +349,12 @@ namespace cuSGA {
         copyToDevice();
 
         // Allocate additional device buffers
-        nodeSize_t* d_frontierBufferSize1{nullptr};
-        CUDA_CHECK(::cudaMallocAsync(&d_frontierBufferSize1, (2 + DoubleBuffer<nodeSize_t>::NUM_DOUBLE_BUFFERS * pangenomeGraph.getNumNodes()) * sizeof(nodeSize_t) + 2 * pangenomeGraph.getNumNodes() * sizeof(int), cudaStreamDefault));
-        const auto d_frontierBufferSize2{d_frontierBufferSize1 + 1};
-        CUDA_CHECK(::cudaMemsetAsync(d_frontierBufferSize1, 0, 2 * sizeof(nodeSize_t), cudaStreamDefault));
-        const auto d_frontierBuffer1{d_frontierBufferSize2 + 1};
+        nodeSize_t* d_frontierBufferSize11{nullptr};
+        CUDA_CHECK(::cudaMallocAsync(&d_frontierBufferSize11, (SequenceGraphKernels::INS_NUM_SIZES + DoubleBuffer<nodeSize_t>::NUM_DOUBLE_BUFFERS * pangenomeGraph.getNumNodes()) * sizeof(nodeSize_t) + 2 * pangenomeGraph.getNumNodes() * sizeof(int), cudaStreamDefault));
+        const auto d_frontierBufferSize12{d_frontierBufferSize11 + 1};
+        const auto d_frontierBufferSize21{d_frontierBufferSize12 + 1};
+        const auto d_frontierBufferSize22{d_frontierBufferSize21 + 1};
+        const auto d_frontierBuffer1{d_frontierBufferSize22 + 1};
         const auto d_frontierBuffer2{d_frontierBuffer1 + pangenomeGraph.getNumNodes()};
         const auto d_frontierQueue1{reinterpret_cast<int*>(d_frontierBuffer2 + pangenomeGraph.getNumNodes())};
         const auto d_frontierQueue2{d_frontierQueue1 + pangenomeGraph.getNumNodes()};
@@ -377,13 +378,13 @@ namespace cuSGA {
             const auto numBases{sequence.getNumBases()};
             for (sequenceSize_t layerIdx{1}; layerIdx < numBases; ++layerIdx) {
                 // Perform deletions for the given layer
-                deletions();
+                cooperativeDeletions(d_frontierBufferSize11);
 
                 // Perform substitutions for the given layer
-                cooperativeSubstitutions(layerIdx, d_frontierBufferSize1, d_frontierBuffer1, d_frontierQueue1);
+                cooperativeSubstitutions(layerIdx, d_frontierBufferSize11, d_frontierBuffer1, d_frontierQueue1);
 
                 // Perform insertions and propagations for the given layer (early return if last layer)
-                cooperativeInsertionsAndPropagations(layerIdx, d_frontierBuffer1, d_frontierBuffer2, d_frontierQueue1, d_frontierQueue2, d_frontierBufferSize1, d_frontierBufferSize2);
+                cooperativeInsertionsAndPropagations(layerIdx, d_frontierBuffer1, d_frontierBuffer2, d_frontierQueue1, d_frontierQueue2, d_frontierBufferSize11, d_frontierBufferSize12, d_frontierBufferSize21, d_frontierBufferSize22);
 
                 // Swap costs double buffer for the next layer (unless last layer)
                 if (layerIdx < sequence.getNumBases() - 1) {
@@ -405,7 +406,7 @@ namespace cuSGA {
         const auto scores{h2d_getScores()};
 
         // Free additional device buffers
-        ::cudaFreeAsync(d_frontierBufferSize1, cudaStreamDefault);
+        ::cudaFreeAsync(d_frontierBufferSize11, cudaStreamDefault);
 
         return scores;
     }
@@ -429,11 +430,12 @@ namespace cuSGA {
         copyToDevice();
 
         // Allocate additional device buffers
-        nodeSize_t* d_frontierBufferSize1{nullptr};
-        CUDA_CHECK(::cudaMallocAsync(&d_frontierBufferSize1, (2 + DoubleBuffer<nodeSize_t>::NUM_DOUBLE_BUFFERS * pangenomeGraph.getNumNodes()) * sizeof(nodeSize_t) + 2 * pangenomeGraph.getNumNodes() * sizeof(int), cudaStreamDefault));
-        const auto d_frontierBufferSize2{d_frontierBufferSize1 + 1};
-        CUDA_CHECK(::cudaMemsetAsync(d_frontierBufferSize1, 0, 2 * sizeof(nodeSize_t), cudaStreamDefault));
-        const auto d_frontierBuffer1{d_frontierBufferSize2 + 1};
+        nodeSize_t* d_frontierBufferSize11{nullptr};
+        CUDA_CHECK(::cudaMallocAsync(&d_frontierBufferSize11, (SequenceGraphKernels::INS_NUM_SIZES + DoubleBuffer<nodeSize_t>::NUM_DOUBLE_BUFFERS * pangenomeGraph.getNumNodes()) * sizeof(nodeSize_t) + 2 * pangenomeGraph.getNumNodes() * sizeof(int), cudaStreamDefault));
+        const auto d_frontierBufferSize12{d_frontierBufferSize11 + 1};
+        const auto d_frontierBufferSize21{d_frontierBufferSize12 + 1};
+        const auto d_frontierBufferSize22{d_frontierBufferSize21 + 1};
+        const auto d_frontierBuffer1{d_frontierBufferSize22 + 1};
         const auto d_frontierBuffer2{d_frontierBuffer1 + pangenomeGraph.getNumNodes()};
         const auto d_frontierQueue1{reinterpret_cast<int*>(d_frontierBuffer2 + pangenomeGraph.getNumNodes())};
         const auto d_frontierQueue2{d_frontierQueue1 + pangenomeGraph.getNumNodes()};
@@ -457,14 +459,14 @@ namespace cuSGA {
             const auto numBases{sequence.getNumBases()};
             for (sequenceSize_t layerIdx{1}; layerIdx < numBases; ++layerIdx) {
                 // Perform deletions for the given layer
-                deletions();
+                cooperativeDeletions(d_frontierBufferSize11);
 
                 // Perform substitutions for the given layer
                 // NOTE: Due to the sparse nature of insertions, it would seem performing block aggregation at the substitution level is not worth it.
-                cooperativeSubstitutions(layerIdx, d_frontierBufferSize1, d_frontierBuffer1, d_frontierQueue1);
+                cooperativeSubstitutions(layerIdx, d_frontierBufferSize11, d_frontierBuffer1, d_frontierQueue1);
 
                 // Perform insertions and propagations for the given layer (early return if last layer)
-                cooperativeBlockAggregationInsertionsAndPropagations(layerIdx, d_frontierBuffer1, d_frontierBuffer2, d_frontierQueue1, d_frontierQueue2, d_frontierBufferSize1, d_frontierBufferSize2);
+                cooperativeBlockAggregationInsertionsAndPropagations(layerIdx, d_frontierBuffer1, d_frontierBuffer2, d_frontierQueue1, d_frontierQueue2, d_frontierBufferSize11, d_frontierBufferSize12, d_frontierBufferSize21, d_frontierBufferSize22);
 
                 // Swap costs double buffer for the next layer (unless last layer)
                 if (layerIdx < sequence.getNumBases() - 1) {
@@ -486,7 +488,7 @@ namespace cuSGA {
         const auto scores{h2d_getScores()};
 
         // Free additional device buffers
-        ::cudaFreeAsync(d_frontierBufferSize1, cudaStreamDefault);
+        ::cudaFreeAsync(d_frontierBufferSize11, cudaStreamDefault);
 
         return scores;
     }
@@ -710,6 +712,29 @@ namespace cuSGA {
         d_currentCosts[nodeIdx] = currentLayerNodeCost;
     }
 
+    __global__ void SequenceGraphKernels::cooperativeDeletions(const cost_t* __restrict__ const d_previousCosts, cost_t* __restrict__ const d_currentCosts, nodeSize_t* __restrict__ const d_frontierQueueSizes, const nodeSize_t numNodes) {
+        // Get thread node index and check for thread overflow
+        const auto nodeIdx{::blockIdx.x * ::blockDim.x + ::threadIdx.x};
+        if (nodeIdx >= numNodes) {
+            return;
+        }
+
+        // Initialize frontier queue sizes
+        if (nodeIdx < INS_NUM_SIZES) {
+            d_frontierQueueSizes[nodeIdx] = 0;
+        }
+
+        // Get node cost in the previous layer
+        const auto previousLayerNodeCost{d_previousCosts[nodeIdx]};
+
+        // Compute updated node cost
+        const auto currentLayerNodeCost{previousLayerNodeCost + SequenceGraph::DELETION_COST};
+
+        // Initialize node cost for the next layer
+        // NOTE: Because deletions are run before propagations and used as an "initialization step" for layers different from the first, we don't need to use atomics
+        d_currentCosts[nodeIdx] = currentLayerNodeCost;
+    }
+
     __global__ void SequenceGraphKernels::insertionsAndPropagations(const edgeSize_t* __restrict__ const d_neighborOffsets, const nodeSize_t* __restrict__ const d_neighborValues, const nodeSize_t* __restrict__ const d_connectedComponentOffsets, const nodeSize_t* __restrict__ const d_connectedComponentMappings, const connectedComponentSize_t* __restrict__ const d_connectedComponentLocalIndexMappings, cost_t* __restrict__ const d_currentCosts, nodeSize_t* __restrict__ const d_buffers, bool* __restrict__ const d_needsVisiting, const targetSize_t numWarpsPerBlock, const connectedComponentSize_t numConnectedComponents, const connectedComponentSize_t maxConnectedComponentSize, const bool earlyExit) {
         // Shared memory, partitioned in the following way to guarantee alignment without wasting any space:
         //      |   sizes(nodeSize_t)   |  buffers (nodeSize_t)  |  isInQueue (queuePack_t)  |
@@ -849,17 +874,19 @@ namespace cuSGA {
         }
     }
 
-    __global__ void SequenceGraphKernels::cooperativeInsertionsAndPropagations(const edgeSize_t* __restrict__ const d_neighborOffsets, const nodeSize_t* __restrict__ const d_neighborValues, cost_t* __restrict__ const d_currentCosts, nodeSize_t* __restrict__ const d_frontierBuffer1, nodeSize_t* __restrict__ const d_frontierBuffer2, int* __restrict__ const d_frontierQueue1, int* __restrict__ const d_frontierQueue2, nodeSize_t* __restrict__ const d_frontierBufferSize1, nodeSize_t* __restrict__ const d_frontierBufferSize2, const bool earlyExit) {
+    __global__ void SequenceGraphKernels::cooperativeInsertionsAndPropagations(const edgeSize_t* __restrict__ const d_neighborOffsets, const nodeSize_t* __restrict__ const d_neighborValues, cost_t* __restrict__ const d_currentCosts, nodeSize_t* __restrict__ const d_frontierBuffer1, nodeSize_t* __restrict__ const d_frontierBuffer2, int* __restrict__ const d_frontierQueue1, int* __restrict__ const d_frontierQueue2, nodeSize_t* __restrict__ const d_frontierBufferSize11, nodeSize_t* __restrict__ const d_frontierBufferSize12, nodeSize_t* __restrict__ const d_frontierBufferSize21, nodeSize_t* __restrict__ const d_frontierBufferSize22, const bool earlyExit) {
         // Get grid handler
         const auto grid{::cooperative_groups::this_grid()};
 
-        // Get selector
-        bool selector{true};
+        // Get selectors
+        bool selector1{true};
+        bool selector2{true};
+        bool selector3{true};
 
         // Loop while frontier not empty
         while (true) {
             // Get frontier size
-            const auto frontierSize{(selector)? *d_frontierBufferSize1 : *d_frontierBufferSize2};
+            const auto frontierSize{(selector1)? ((selector2)? *d_frontierBufferSize11 : *d_frontierBufferSize12) : ((selector3)? *d_frontierBufferSize21 : *d_frontierBufferSize22)};
 
             // Check if frontier is empty
             if (frontierSize == 0) {
@@ -867,17 +894,17 @@ namespace cuSGA {
             }
 
             // Get frontier buffer
-            const auto* __restrict__ const frontierBuffer{(selector)? d_frontierBuffer1 : d_frontierBuffer2};
+            const auto* __restrict__ const frontierBuffer{(selector1)? d_frontierBuffer1 : d_frontierBuffer2};
 
             // Get queue buffer
-            auto* __restrict__ const queueBuffer{(selector)? d_frontierBuffer2 : d_frontierBuffer1};
+            auto* __restrict__ const queueBuffer{(selector1)? d_frontierBuffer2 : d_frontierBuffer1};
 
             // Get current and next queue masks
-            auto* __restrict__ const currentQueueMask{(selector)? d_frontierQueue1 : d_frontierQueue2};
-            auto* __restrict__ const nextQueueMask{(selector)? d_frontierQueue2 : d_frontierQueue1};
+            auto* __restrict__ const currentQueueMask{(selector1)? d_frontierQueue1 : d_frontierQueue2};
+            auto* __restrict__ const nextQueueMask{(selector1)? d_frontierQueue2 : d_frontierQueue1};
 
             // Get queue size pointer
-            auto* __restrict__ const queueSize{(selector)? d_frontierBufferSize2 : d_frontierBufferSize1};
+            auto* __restrict__ const queueSize{(selector1)? ((selector2)? d_frontierBufferSize21 : d_frontierBufferSize22) : ((selector3)? d_frontierBufferSize11 : d_frontierBufferSize12)};
 
             // Get thread ID
             const auto threadID{::blockIdx.x * ::blockDim.x + ::threadIdx.x};
@@ -931,28 +958,41 @@ namespace cuSGA {
                 }
             }
 
-            // Synchronize grid
-            grid.sync();
-
             // Flush current size
             if (::cooperative_groups::grid_group::thread_rank() == 0) {
-                if (selector) {
-                    *d_frontierBufferSize1 = 0;
+                if (selector1) {
+                    if (selector2) {
+                        *d_frontierBufferSize12 = 0;
+                    }
+                    else {
+                        *d_frontierBufferSize11 = 0;
+                    }
                 }
                 else {
-                    *d_frontierBufferSize2 = 0;
+                    if (selector3) {
+                        *d_frontierBufferSize22 = 0;
+                    }
+                    else {
+                        *d_frontierBufferSize21 = 0;
+                    }
                 }
             }
 
             // Swap selector
-            selector = !selector;
+            if (selector1) {
+                selector2 = !selector2;
+            }
+            else {
+                selector3 = !selector3;
+            }
+            selector1 = !selector1;
 
             // Synchronize grid
             grid.sync();
         }
     }
 
-    __global__ void SequenceGraphKernels::cooperativeBlockAggregationInsertionsAndPropagations(const edgeSize_t* __restrict__ const d_neighborOffsets, const nodeSize_t* __restrict__ const d_neighborValues, cost_t* __restrict__ const d_currentCosts, nodeSize_t* __restrict__ const d_frontierBuffer1, nodeSize_t* __restrict__ const d_frontierBuffer2, int* __restrict__ const d_frontierQueue1, int* __restrict__ const d_frontierQueue2, nodeSize_t* __restrict__ const d_frontierBufferSize1, nodeSize_t* __restrict__ const d_frontierBufferSize2, const bool earlyExit) {
+    __global__ void SequenceGraphKernels::cooperativeBlockAggregationInsertionsAndPropagations(const edgeSize_t* __restrict__ const d_neighborOffsets, const nodeSize_t* __restrict__ const d_neighborValues, cost_t* __restrict__ const d_currentCosts, nodeSize_t* __restrict__ const d_frontierBuffer1, nodeSize_t* __restrict__ const d_frontierBuffer2, int* __restrict__ const d_frontierQueue1, int* __restrict__ const d_frontierQueue2, nodeSize_t* __restrict__ const d_frontierBufferSize11, nodeSize_t* __restrict__ const d_frontierBufferSize12, nodeSize_t* __restrict__ const d_frontierBufferSize21, nodeSize_t* __restrict__ const d_frontierBufferSize22, const bool earlyExit) {
         // Shared memory queue
         __shared__ nodeSize_t shared_queueSize;
         __shared__ nodeSize_t shared_queueBuffer[INS_SHARED_QUEUE_BUFFER_SIZE];
@@ -962,12 +1002,14 @@ namespace cuSGA {
         const auto grid{::cooperative_groups::this_grid()};
 
         // Get selector
-        bool selector{true};
+        bool selector1{true};
+        bool selector2{true};
+        bool selector3{true};
 
         // Loop while frontier not empty
         while (true) {
             // Get frontier size
-            const auto frontierSize{(selector)? *d_frontierBufferSize1 : *d_frontierBufferSize2};
+            const auto frontierSize{(selector1)? ((selector2)? *d_frontierBufferSize11 : *d_frontierBufferSize12) : ((selector3)? *d_frontierBufferSize21 : *d_frontierBufferSize22)};
 
             // Check if frontier is empty
             if (frontierSize == 0) {
@@ -975,17 +1017,17 @@ namespace cuSGA {
             }
 
             // Get frontier buffer
-            const auto* __restrict__ const frontierBuffer{(selector)? d_frontierBuffer1 : d_frontierBuffer2};
+            const auto* __restrict__ const frontierBuffer{(selector1)? d_frontierBuffer1 : d_frontierBuffer2};
 
             // Get queue buffer
-            auto* __restrict__ const queueBuffer{(selector)? d_frontierBuffer2 : d_frontierBuffer1};
+            auto* __restrict__ const queueBuffer{(selector1)? d_frontierBuffer2 : d_frontierBuffer1};
 
             // Get current and next queue masks
-            auto* __restrict__ const currentQueueMask{(selector)? d_frontierQueue1 : d_frontierQueue2};
-            auto* __restrict__ const nextQueueMask{(selector)? d_frontierQueue2 : d_frontierQueue1};
+            auto* __restrict__ const currentQueueMask{(selector1)? d_frontierQueue1 : d_frontierQueue2};
+            auto* __restrict__ const nextQueueMask{(selector1)? d_frontierQueue2 : d_frontierQueue1};
 
             // Get queue size pointer
-            auto* __restrict__ const queueSize{(selector)? d_frontierBufferSize2 : d_frontierBufferSize1};
+            auto* __restrict__ const queueSize{(selector1)? ((selector2)? d_frontierBufferSize21 : d_frontierBufferSize22) : ((selector3)? d_frontierBufferSize11 : d_frontierBufferSize12)};
 
             // Initialize block queue size
             if (::threadIdx.x == 0) {
@@ -1086,21 +1128,34 @@ namespace cuSGA {
                 }
             }
 
-            // Synchronize grid
-            grid.sync();
-
             // Flush current size
             if (::cooperative_groups::grid_group::thread_rank() == 0) {
-                if (selector) {
-                    *d_frontierBufferSize1 = 0;
+                if (selector1) {
+                    if (selector2) {
+                        *d_frontierBufferSize12 = 0;
+                    }
+                    else {
+                        *d_frontierBufferSize11 = 0;
+                    }
                 }
                 else {
-                    *d_frontierBufferSize2 = 0;
+                    if (selector3) {
+                        *d_frontierBufferSize22 = 0;
+                    }
+                    else {
+                        *d_frontierBufferSize21 = 0;
+                    }
                 }
             }
 
             // Swap selector
-            selector = !selector;
+            if (selector1) {
+                selector2 = !selector2;
+            }
+            else {
+                selector3 = !selector3;
+            }
+            selector1 = !selector1;
 
             // Synchronize grid
             grid.sync();

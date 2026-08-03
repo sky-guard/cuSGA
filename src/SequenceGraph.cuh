@@ -34,6 +34,7 @@ namespace cuSGA {
 
         // Deletions kernel
         __global__ void deletions(const cost_t* __restrict__ d_previousCosts, cost_t* __restrict__ d_currentCosts, nodeSize_t numNodes);
+        __global__ void cooperativeDeletions(const cost_t* __restrict__ d_previousCosts, cost_t* __restrict__ d_currentCosts, nodeSize_t* __restrict__ d_frontierQueueSizes, nodeSize_t numNodes);
 
         // Insertions and propagations kernel
         inline constexpr ::uint8_t INS_NUM_SIZES{4};
@@ -42,8 +43,8 @@ namespace cuSGA {
         __device__ __forceinline__ void processNeighbor(nodeSize_t* __restrict__ shared_queueBuffer, nodeSize_t* __restrict__ d_queueBuffer, nodeSize_t* __restrict__ shared_queueSize, nodeSize_t* __restrict__ shared_deviceQueueSize, queuePack_t* __restrict__ shared_isInQueue, cost_t* __restrict__ d_currentCosts, nodeSize_t neighborIdx, nodeSize_t neighborLocalIdx, cost_t updatedCurrentLayerNeighborCost);
         __device__ __forceinline__ void processNode(nodeSize_t* __restrict__ shared_queueBuffer, nodeSize_t* __restrict__ d_queueBuffer, nodeSize_t* __restrict__ shared_queueSize, nodeSize_t* __restrict__ shared_deviceQueueSize, queuePack_t* __restrict__ shared_isInQueue, cost_t* __restrict__ d_currentCosts, const edgeSize_t* __restrict__ d_neighborOffsets, const nodeSize_t* __restrict__ d_neighborValues, const connectedComponentSize_t* __restrict__ d_connectedComponentLocalIndexMappings, nodeSize_t nodeIdx);
         __global__ void insertionsAndPropagations(const edgeSize_t* __restrict__ d_neighborOffsets, const nodeSize_t* __restrict__ d_neighborValues, const nodeSize_t* __restrict__ d_connectedComponentOffsets, const nodeSize_t* __restrict__ d_connectedComponentMappings, const connectedComponentSize_t* __restrict__ d_connectedComponentLocalIndexMappings, cost_t* __restrict__ d_currentCosts, nodeSize_t* __restrict__ d_buffers, bool* __restrict__ d_needsVisiting, targetSize_t numWarpsPerBlock, connectedComponentSize_t numConnectedComponents, connectedComponentSize_t maxConnectedComponentSize, bool earlyExit);
-        __global__ void cooperativeInsertionsAndPropagations(const edgeSize_t* __restrict__ d_neighborOffsets, const nodeSize_t* __restrict__ d_neighborValues, cost_t* __restrict__ d_currentCosts, nodeSize_t* __restrict__ d_frontierBuffer1, nodeSize_t* __restrict__ d_frontierBuffer2, int* __restrict__ d_frontierQueue1, int* __restrict__ d_frontierQueue2, nodeSize_t* __restrict__ d_frontierBufferSize1, nodeSize_t* __restrict__ d_frontierBufferSize2, bool earlyExit);
-        __global__ void cooperativeBlockAggregationInsertionsAndPropagations(const edgeSize_t* __restrict__ d_neighborOffsets, const nodeSize_t* __restrict__ d_neighborValues, cost_t* __restrict__ d_currentCosts, nodeSize_t* __restrict__ d_frontierBuffer1, nodeSize_t* __restrict__ d_frontierBuffer2, int* __restrict__ d_frontierQueue1, int* __restrict__ d_frontierQueue2, nodeSize_t* __restrict__ d_frontierBufferSize1, nodeSize_t* __restrict__ d_frontierBufferSize2, bool earlyExit);
+        __global__ void cooperativeInsertionsAndPropagations(const edgeSize_t* __restrict__ d_neighborOffsets, const nodeSize_t* __restrict__ d_neighborValues, cost_t* __restrict__ d_currentCosts, nodeSize_t* __restrict__ d_frontierBuffer1, nodeSize_t* __restrict__ d_frontierBuffer2, int* __restrict__ d_frontierQueue1, int* __restrict__ d_frontierQueue2, nodeSize_t* __restrict__ d_frontierBufferSize11, nodeSize_t* __restrict__ d_frontierBufferSize12, nodeSize_t* __restrict__ d_frontierBufferSize21, nodeSize_t* __restrict__ d_frontierBufferSize22, bool earlyExit);
+        __global__ void cooperativeBlockAggregationInsertionsAndPropagations(const edgeSize_t* __restrict__ d_neighborOffsets, const nodeSize_t* __restrict__ d_neighborValues, cost_t* __restrict__ d_currentCosts, nodeSize_t* __restrict__ d_frontierBuffer1, nodeSize_t* __restrict__ d_frontierBuffer2, int* __restrict__ d_frontierQueue1, int* __restrict__ d_frontierQueue2, nodeSize_t* __restrict__ d_frontierBufferSize11, nodeSize_t* __restrict__ d_frontierBufferSize12, nodeSize_t* __restrict__ d_frontierBufferSize21, nodeSize_t* __restrict__ d_frontierBufferSize22, bool earlyExit);
 
         // Minimum cost kernel
         __global__ void minCost(const cost_t* __restrict__ d_currentCosts, cost_t* __restrict__ d_scores, nodeSize_t numNodes, scoreSize_t scoreIdx);
@@ -332,6 +333,18 @@ namespace cuSGA {
             KernelUtils::cudaLaunchKernel<SequenceGraphKernels::deletions>(gridSize, blockSize, 0, cudaStreamDefault, pinned_instance->costsDoubleBuffer.alternate(), pinned_instance->costsDoubleBuffer.current(), pinned_instance->pangenomeGraph.getNumNodes());
         }
 
+        // Launch cooperative deletions kernel
+        __host__ __forceinline__ void cooperativeDeletions(nodeSize_t* const d_frontierQueueSizes) const {
+            // Get block size
+            const auto blockSize{KernelUtils::cudaSizeBlock<SequenceGraphKernels::cooperativeDeletions>()};
+
+            // Get grid size
+            const auto gridSize{KernelUtils::cudaSizeGrid(pangenomeGraph.getNumNodes(), blockSize)};
+
+            // Launch kernel
+            KernelUtils::cudaLaunchKernel<SequenceGraphKernels::cooperativeDeletions>(gridSize, blockSize, 0, cudaStreamDefault, pinned_instance->costsDoubleBuffer.alternate(), pinned_instance->costsDoubleBuffer.current(), d_frontierQueueSizes, pinned_instance->pangenomeGraph.getNumNodes());
+        }
+
         // Launch insertions and propagations kernel
         __host__ __forceinline__ void insertionsAndPropagations(const sequenceSize_t layerIdx, nodeSize_t* const d_buffers, bool* const d_needsVisiting) const {
             // Cached block sizes
@@ -374,7 +387,7 @@ namespace cuSGA {
         }
 
         // Launch cooperative insertions and propagations kernel
-        __host__ __forceinline__ void cooperativeInsertionsAndPropagations(const sequenceSize_t layerIdx, const nodeSize_t* const d_frontierBuffer1, const nodeSize_t* const d_frontierBuffer2, const int* const d_frontierQueue1, const int* const d_frontierQueue2, const nodeSize_t* const d_frontierBufferSize1, const nodeSize_t* const d_frontierBufferSize2) const {
+        __host__ __forceinline__ void cooperativeInsertionsAndPropagations(const sequenceSize_t layerIdx, nodeSize_t* const d_frontierBuffer1, nodeSize_t* const d_frontierBuffer2, int* const d_frontierQueue1, int* const d_frontierQueue2, nodeSize_t* const d_frontierBufferSize11, nodeSize_t* const d_frontierBufferSize12, nodeSize_t* const d_frontierBufferSize21, nodeSize_t* const d_frontierBufferSize22) const {
             // Cached grid and block sizes
             static int cachedGridSizes[NUM_BASES]{};
             static int cachedBlockSizes[NUM_BASES]{};
@@ -398,11 +411,11 @@ namespace cuSGA {
             const auto gridSize{cachedGridSizes[static_cast<DNABase_t>(sequenceBase)]};
 
             // Launch kernel
-            KernelUtils::cudaLaunchCooperativeKernel<SequenceGraphKernels::cooperativeInsertionsAndPropagations>(gridSize, blockSize, 0, cudaStreamDefault, pinned_instance->pangenomeGraph.getNeighborOffsets(), pinned_instance->pangenomeGraph.getNeighborValues(), pinned_instance->costsDoubleBuffer.current(), d_frontierBuffer1, d_frontierBuffer2, d_frontierQueue1, d_frontierQueue2, d_frontierBufferSize1, d_frontierBufferSize2, layerIdx == sequence.getNumBases() - 1);
+            KernelUtils::cudaLaunchCooperativeKernel<SequenceGraphKernels::cooperativeInsertionsAndPropagations>(gridSize, blockSize, 0, cudaStreamDefault, pinned_instance->pangenomeGraph.getNeighborOffsets(), pinned_instance->pangenomeGraph.getNeighborValues(), pinned_instance->costsDoubleBuffer.current(), d_frontierBuffer1, d_frontierBuffer2, d_frontierQueue1, d_frontierQueue2, d_frontierBufferSize11, d_frontierBufferSize12, d_frontierBufferSize21, d_frontierBufferSize22, layerIdx == sequence.getNumBases() - 1);
         }
 
         // Launch cooperative insertions and propagations kernel (with block aggregation)
-        __host__ __forceinline__ void cooperativeBlockAggregationInsertionsAndPropagations(const sequenceSize_t layerIdx, const nodeSize_t* const d_frontierBuffer1, const nodeSize_t* const d_frontierBuffer2, const int* const d_frontierQueue1, const int* const d_frontierQueue2, const nodeSize_t* const d_frontierBufferSize1, const nodeSize_t* const d_frontierBufferSize2) const {
+        __host__ __forceinline__ void cooperativeBlockAggregationInsertionsAndPropagations(const sequenceSize_t layerIdx, nodeSize_t* const d_frontierBuffer1, nodeSize_t* const d_frontierBuffer2, int* const d_frontierQueue1, int* const d_frontierQueue2, nodeSize_t* const d_frontierBufferSize11, nodeSize_t* const d_frontierBufferSize12, nodeSize_t* const d_frontierBufferSize21, nodeSize_t* const d_frontierBufferSize22) const {
             // Cached grid and block sizes
             static int cachedGridSizes[NUM_BASES]{};
             static int cachedBlockSizes[NUM_BASES]{};
@@ -426,7 +439,7 @@ namespace cuSGA {
             const auto gridSize{cachedGridSizes[static_cast<DNABase_t>(sequenceBase)]};
 
             // Launch kernel
-            KernelUtils::cudaLaunchCooperativeKernel<SequenceGraphKernels::cooperativeBlockAggregationInsertionsAndPropagations>(gridSize, blockSize, 0, cudaStreamDefault, pinned_instance->pangenomeGraph.getNeighborOffsets(), pinned_instance->pangenomeGraph.getNeighborValues(), pinned_instance->costsDoubleBuffer.current(), d_frontierBuffer1, d_frontierBuffer2, d_frontierQueue1, d_frontierQueue2, d_frontierBufferSize1, d_frontierBufferSize2, layerIdx == sequence.getNumBases() - 1);
+            KernelUtils::cudaLaunchCooperativeKernel<SequenceGraphKernels::cooperativeBlockAggregationInsertionsAndPropagations>(gridSize, blockSize, 0, cudaStreamDefault, pinned_instance->pangenomeGraph.getNeighborOffsets(), pinned_instance->pangenomeGraph.getNeighborValues(), pinned_instance->costsDoubleBuffer.current(), d_frontierBuffer1, d_frontierBuffer2, d_frontierQueue1, d_frontierQueue2, d_frontierBufferSize11, d_frontierBufferSize12, d_frontierBufferSize21, d_frontierBufferSize22, layerIdx == sequence.getNumBases() - 1);
         }
 
         // Launch min cost kernel
