@@ -136,7 +136,7 @@ To align a sequence using **Connected Components level Synchronization (DEFAULT)
 ./cuSGA -s SEQUENCE_FILE -p PANGENOME_GRAPH_FILE -c CONNECTED_COMPONENTS_FILE_PREFIX
 ```
 
-***NOTE**: When running this version of the Algorithm, **it is highly recommended to perform a preliminary step of Connected Components Compaction**. This is because this version of the Algorithm is sensitive to the Sizes of the Connected Components: if the average size is too small, Threads in a Warp may end up being not utilized enough or at all. Average Speedup achieved with an Average Connected Components Size of ~4 Nodes was around ~10.0x, while **the Peak Speedup of 14.6x was achieved with an Average Connected Components Size of ~1200 Nodes**. This, however, is meant as a **suggestion** and is **not guaranteed to be the ideal target size**.*
+***NOTE**: When running this version of the Algorithm, **it is highly recommended to perform a preliminary step of Connected Components Compaction**. This is because this version of the Algorithm is sensitive to the Sizes of the Connected Components: if the average size is too small, Threads in a Warp may end up being not utilized enough or at all. Average Speedup achieved with an Average Connected Components Size of ~4 Nodes was around ~11.2x, while with an Average Connected Components Size of ~32 Nodes it was around ~13.6x. Meanwhile, **the Peak Speedup of 14.6x was achieved with an Average Connected Components Size of ~1200 Nodes**. This, however, is meant as a **suggestion** and is **not guaranteed to be the ideal target size**.*
 
 To align a sequence using **Grid level Synchronization with Cooperative Groups** and print the resulting Alignment Scores, please run the following command:
 ```bash
