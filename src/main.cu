@@ -15,7 +15,7 @@ int main(const int argc, const char* const argv[]) {
         }
 
         // Create sequence graph instance
-        auto sequenceGraph{::cuSGA::SequenceGraph{parsedArguments.pangenomeGraphFileName, parsedArguments.sequenceFileName, parsedArguments.connectedComponentsFileNames, !parsedArguments.useGlobalFrontier && !parsedArguments.useBlockAggregation, true}};
+        auto sequenceGraph{::cuSGA::SequenceGraph{parsedArguments.pangenomeGraphFileName, parsedArguments.sequenceFileName, parsedArguments.connectedComponentsFileNames, !parsedArguments.useGlobalFrontier && !parsedArguments.useBlockAggregation, parsedArguments.useCharacterGraphs, true}};
 
         // Align sequence to graph
         const ::cuSGA::cost_t* scores{};
@@ -26,7 +26,7 @@ int main(const int argc, const char* const argv[]) {
             scores = sequenceGraph.gridBlockAggregationAlign(parsedArguments.sequenceFileName);
         }
         else {
-            scores = sequenceGraph.connectedComponentsAlign(parsedArguments.sequenceFileName);
+            scores = sequenceGraph.connectedComponentsAlign(parsedArguments.sequenceFileName, parsedArguments.useCharacterGraphs);
         }
 
         // Print results

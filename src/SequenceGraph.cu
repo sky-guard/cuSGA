@@ -6,7 +6,7 @@
 #include "KernelUtils.cuh"
 
 namespace cuSGA {
-    __host__ SequenceGraph::SequenceGraph(const ::std::string& pangenomeGraphFileName, const ::std::string& sequenceFileName, ::std::string const (& connectedComponentsFileNames)[NUM_BASES], const bool readConnectedComponents, bool ownsInstance, SequenceGraph* pinned_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) : SequenceGraph{PangenomeGraph{}, PackedDNASequence{}, {0}, {nullptr}, {nullptr}, {nullptr}, {nullptr}, {0}, {0}, {nullptr}, {nullptr}, DoubleBuffer<cost_t>{}, 0, nullptr, ownsInstance, pinned_instanceOptional} {
+    __host__ SequenceGraph::SequenceGraph(const ::std::string& pangenomeGraphFileName, const ::std::string& sequenceFileName, ::std::string const (& connectedComponentsFileNames)[NUM_BASES], const bool useConnectedComponents, const bool useCharacterGraphs, const bool ownsInstance, SequenceGraph* pinned_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) : SequenceGraph{PangenomeGraph{}, PackedDNASequence{}, {0}, {nullptr}, {nullptr}, {nullptr}, {nullptr}, {0}, {0}, {nullptr}, {nullptr}, DoubleBuffer<cost_t>{}, 0, nullptr, ownsInstance, pinned_instanceOptional} {
         // Get allocator
         KernelUtils::BumpPtrAllocator* allocator{allocatorOptional};
         KernelUtils::BumpPtrAllocator allocatorInstance{};
@@ -48,7 +48,7 @@ namespace cuSGA {
         ::std::ifstream connectedComponentsFiles[NUM_BASES]{};
         connectedComponentSize_t totalNumConnectedComponents{0};
         connectedComponentSize_t numConnectedComponents[NUM_BASES]{};
-        if (readConnectedComponents) {
+        if (useConnectedComponents) {
 #pragma unroll
             for (DNABase_t baseIdx{0}; baseIdx < NUM_BASES; ++baseIdx) {
                 // Open connected components file
@@ -67,7 +67,7 @@ namespace cuSGA {
         // Grow allocator
         if (ownsInstance) {
             allocator->grow<SequenceGraph>();
-            growBuffers(allocator, numNodes, numEdges, maxSequenceLength, totalNumConnectedComponents, numScores);
+            growBuffers(allocator, numNodes, numEdges, maxSequenceLength, totalNumConnectedComponents, numScores, useConnectedComponents, useCharacterGraphs);
         }
 
         // Initialize allocator
@@ -81,7 +81,7 @@ namespace cuSGA {
         }
         this->pangenomeGraph = PangenomeGraph{pangenomeGraphFileName, false, &pinned_instance->pangenomeGraph, allocator};
         this->sequence = PackedDNASequence{sequenceFileName, false, &pinned_instance->sequence, allocator};
-        if (readConnectedComponents) {
+        if (useConnectedComponents) {
             const auto connectedComponentsOffsetsBase{allocator->emplaceReserve<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsOffsets[0])>>>(totalNumConnectedComponents + NUM_BASES)};
             const auto connectedComponentsMappingsBase{allocator->emplaceReserve<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsMappings[0])>>>(NUM_BASES * numNodes)};
             const auto connectedComponentsReverseMappingsBase{allocator->emplaceReserve<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsReverseMappings[0])>>>(NUM_BASES * numNodes)};
@@ -145,40 +145,42 @@ namespace cuSGA {
                 }
                 this->maxConnectedComponentsSizes[baseIdx] = maxConnectedComponentsSize;
 
-                // Read connected component number of edges
-                edgeSize_t connectedComponentNumEdges{0};
-                if (!(connectedComponentsFile >> connectedComponentNumEdges)) {
-                    throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", connectedComponentsFileNames[baseIdx])};
-                }
-                this->connectedComponentsNumEdges[baseIdx] = connectedComponentNumEdges;
-
-                // Read connected component row offsets from file
-                const auto connectedComponentsRowOffsets{connectedComponentsRowOffsetsBase + baseIdx * (numNodes + 1)};
-                for (nodeSize_t rowOffsetIdx{0}; rowOffsetIdx <= numNodes; ++rowOffsetIdx) {
-                    edgeSize_t connectedComponentRowOffset{0};
-                    if (!(connectedComponentsFile >> connectedComponentRowOffset)) {
+                if (useCharacterGraphs) {
+                    // Read connected component number of edges
+                    edgeSize_t connectedComponentNumEdges{0};
+                    if (!(connectedComponentsFile >> connectedComponentNumEdges)) {
                         throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", connectedComponentsFileNames[baseIdx])};
                     }
-                    connectedComponentsRowOffsets[rowOffsetIdx] = connectedComponentRowOffset;
-                }
-                this->connectedComponentsRowOffsets[baseIdx] = connectedComponentsRowOffsets;
+                    this->connectedComponentsNumEdges[baseIdx] = connectedComponentNumEdges;
 
-                // Read connected component column values from file
-                const auto connectedComponentsColumnValues{connectedComponentsColumnValuesBase + connectedComponentsEdgesCounter};
-                for (edgeSize_t edgeIdx{0}; edgeIdx < connectedComponentNumEdges; ++edgeIdx) {
-                    nodeSize_t connectedComponentColumnValue{0};
-                    if (!(connectedComponentsFile >> connectedComponentColumnValue)) {
-                        throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", connectedComponentsFileNames[baseIdx])};
+                    // Read connected component row offsets from file
+                    const auto connectedComponentsRowOffsets{connectedComponentsRowOffsetsBase + baseIdx * (numNodes + 1)};
+                    for (nodeSize_t rowOffsetIdx{0}; rowOffsetIdx <= numNodes; ++rowOffsetIdx) {
+                        edgeSize_t connectedComponentRowOffset{0};
+                        if (!(connectedComponentsFile >> connectedComponentRowOffset)) {
+                            throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", connectedComponentsFileNames[baseIdx])};
+                        }
+                        connectedComponentsRowOffsets[rowOffsetIdx] = connectedComponentRowOffset;
                     }
-                    connectedComponentsColumnValues[edgeIdx] = connectedComponentColumnValue;
+                    this->connectedComponentsRowOffsets[baseIdx] = connectedComponentsRowOffsets;
+
+                    // Read connected component column values from file
+                    const auto connectedComponentsColumnValues{connectedComponentsColumnValuesBase + connectedComponentsEdgesCounter};
+                    for (edgeSize_t edgeIdx{0}; edgeIdx < connectedComponentNumEdges; ++edgeIdx) {
+                        nodeSize_t connectedComponentColumnValue{0};
+                        if (!(connectedComponentsFile >> connectedComponentColumnValue)) {
+                            throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", connectedComponentsFileNames[baseIdx])};
+                        }
+                        connectedComponentsColumnValues[edgeIdx] = connectedComponentColumnValue;
+                    }
+                    this->connectedComponentsColumnValues[baseIdx] = connectedComponentsColumnValues;
+
+                    // Increase number of connected components edges counter
+                    connectedComponentsEdgesCounter += numEdges;
                 }
-                this->connectedComponentsColumnValues[baseIdx] = connectedComponentsColumnValues;
 
                 // Increase number of connected components counter
                 connectedComponentsCounter += (numConnectedComponents[baseIdx] + 1);
-
-                // Increase number of connected components edges counter
-                connectedComponentsEdgesCounter += numEdges;
 
                 // Close connected components file
                 connectedComponentsFile.close();
@@ -195,7 +197,7 @@ namespace cuSGA {
         sequenceFile.close();
     }
 
-    __host__ SequenceGraph SequenceGraph::copyToDevice(SequenceGraph* d_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) {
+    __host__ SequenceGraph SequenceGraph::copyToDevice(const bool useConnectedComponents, const bool useCharacterGraphs, SequenceGraph* d_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) {
         // Check if device instance already exists for this sequence graph
         if (d_instance) {
             throw ::std::runtime_error{"Device instance already exists for this Sequence Graph!"};
@@ -217,7 +219,7 @@ namespace cuSGA {
         // Grow allocator
         if (ownsInstance) {
             allocator->grow<SequenceGraph>();
-            growBuffersWithoutSequence(allocator, pangenomeGraph.getNumNodes(), pangenomeGraph.getNumEdges(), totalNumConnectedComponents, numScores);
+            growBuffersWithoutSequence(allocator, pangenomeGraph.getNumNodes(), pangenomeGraph.getNumEdges(), totalNumConnectedComponents, numScores, useConnectedComponents, useCharacterGraphs);
         }
 
         // Initialize allocator
@@ -235,30 +237,34 @@ namespace cuSGA {
 
         // Emplace buffers
         const auto d_pangenomeGraph{pangenomeGraph.copyToDevice(&d_instance->pangenomeGraph, allocator)};
-        const auto d_connectedComponentsOffsetsBase{allocator->cudaEmplaceCopy<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsOffsets[0])>>>(connectedComponentsOffsets[0], ::cudaMemcpyHostToDevice, totalNumConnectedComponents + NUM_BASES, false, cudaStreamDefault)};
-        const auto d_connectedComponentsMappingsBase{allocator->cudaEmplaceCopy<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsMappings[0])>>>(connectedComponentsMappings[0], ::cudaMemcpyHostToDevice, NUM_BASES * pangenomeGraph.getNumNodes(), false, cudaStreamDefault)};
-        const auto d_connectedComponentsReverseMappingsBase{allocator->cudaEmplaceCopy<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsReverseMappings[0])>>>(connectedComponentsReverseMappings[0], ::cudaMemcpyHostToDevice, NUM_BASES * pangenomeGraph.getNumNodes(), false, cudaStreamDefault)};
-        const auto d_connectedComponentsLocalIndexMappingsBase{allocator->cudaEmplaceCopy<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsLocalIndexMappings[0])>>>(connectedComponentsLocalIndexMappings[0], ::cudaMemcpyHostToDevice, NUM_BASES * pangenomeGraph.getNumNodes(), false, cudaStreamDefault)};
-        const auto d_connectedComponentsRowOffsetsBase{allocator->cudaEmplaceCopy<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsRowOffsets[0])>>>(connectedComponentsRowOffsets[0], ::cudaMemcpyHostToDevice, NUM_BASES * (pangenomeGraph.getNumNodes() + 1), false, cudaStreamDefault)};
-        const auto d_connectedComponentsColumnValuesBase{allocator->cudaEmplaceCopy<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsColumnValues[0])>>>(connectedComponentsColumnValues[0], ::cudaMemcpyHostToDevice, NUM_BASES * pangenomeGraph.getNumEdges(), false, cudaStreamDefault)};
         nodeSize_t* d_connectedComponentsOffsets[NUM_BASES]{nullptr};
         nodeSize_t* d_connectedComponentsMappings[NUM_BASES]{nullptr};
         connectedComponentSize_t* d_connectedComponentsReverseMappings[NUM_BASES]{nullptr};
         connectedComponentSize_t* d_connectedComponentsLocalIndexMappings[NUM_BASES]{nullptr};
         edgeSize_t* d_connectedComponentsRowOffsets[NUM_BASES]{nullptr};
         nodeSize_t* d_connectedComponentsColumnValues[NUM_BASES]{nullptr};
-        connectedComponentSize_t connectedComponentsCounter{0};
-        edgeSize_t connectedComponentsEdgesCounter{0};
+        if (useConnectedComponents) {
+            const auto d_connectedComponentsOffsetsBase{allocator->cudaEmplaceCopy<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsOffsets[0])>>>(connectedComponentsOffsets[0], ::cudaMemcpyHostToDevice, totalNumConnectedComponents + NUM_BASES, false, cudaStreamDefault)};
+            const auto d_connectedComponentsMappingsBase{allocator->cudaEmplaceCopy<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsMappings[0])>>>(connectedComponentsMappings[0], ::cudaMemcpyHostToDevice, NUM_BASES * pangenomeGraph.getNumNodes(), false, cudaStreamDefault)};
+            const auto d_connectedComponentsReverseMappingsBase{allocator->cudaEmplaceCopy<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsReverseMappings[0])>>>(connectedComponentsReverseMappings[0], ::cudaMemcpyHostToDevice, NUM_BASES * pangenomeGraph.getNumNodes(), false, cudaStreamDefault)};
+            const auto d_connectedComponentsLocalIndexMappingsBase{allocator->cudaEmplaceCopy<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsLocalIndexMappings[0])>>>(connectedComponentsLocalIndexMappings[0], ::cudaMemcpyHostToDevice, NUM_BASES * pangenomeGraph.getNumNodes(), false, cudaStreamDefault)};
+            const auto d_connectedComponentsRowOffsetsBase{allocator->cudaEmplaceCopy<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsRowOffsets[0])>>>(connectedComponentsRowOffsets[0], ::cudaMemcpyHostToDevice, NUM_BASES * (pangenomeGraph.getNumNodes() + 1), false, cudaStreamDefault)};
+            const auto d_connectedComponentsColumnValuesBase{allocator->cudaEmplaceCopy<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsColumnValues[0])>>>(connectedComponentsColumnValues[0], ::cudaMemcpyHostToDevice, NUM_BASES * pangenomeGraph.getNumEdges(), false, cudaStreamDefault)};
+            connectedComponentSize_t connectedComponentsCounter{0};
+            edgeSize_t connectedComponentsEdgesCounter{0};
 #pragma unroll
-        for (DNABase_t baseIdx{0}; baseIdx < NUM_BASES; ++baseIdx) {
-            d_connectedComponentsOffsets[baseIdx] = d_connectedComponentsOffsetsBase + connectedComponentsCounter;
-            d_connectedComponentsMappings[baseIdx] = d_connectedComponentsMappingsBase + baseIdx * pangenomeGraph.getNumNodes();
-            d_connectedComponentsReverseMappings[baseIdx] = d_connectedComponentsReverseMappingsBase + baseIdx * pangenomeGraph.getNumNodes();
-            d_connectedComponentsLocalIndexMappings[baseIdx] = d_connectedComponentsLocalIndexMappingsBase + baseIdx * pangenomeGraph.getNumNodes();
-            d_connectedComponentsRowOffsets[baseIdx] = d_connectedComponentsRowOffsetsBase + baseIdx * (pangenomeGraph.getNumNodes() + 1);
-            d_connectedComponentsColumnValues[baseIdx] = d_connectedComponentsColumnValuesBase + connectedComponentsEdgesCounter;
-            connectedComponentsCounter += (numConnectedComponents[baseIdx] + 1);
-            connectedComponentsEdgesCounter += connectedComponentsNumEdges[baseIdx];
+            for (DNABase_t baseIdx{0}; baseIdx < NUM_BASES; ++baseIdx) {
+                d_connectedComponentsOffsets[baseIdx] = d_connectedComponentsOffsetsBase + connectedComponentsCounter;
+                d_connectedComponentsMappings[baseIdx] = d_connectedComponentsMappingsBase + baseIdx * pangenomeGraph.getNumNodes();
+                d_connectedComponentsReverseMappings[baseIdx] = d_connectedComponentsReverseMappingsBase + baseIdx * pangenomeGraph.getNumNodes();
+                d_connectedComponentsLocalIndexMappings[baseIdx] = d_connectedComponentsLocalIndexMappingsBase + baseIdx * pangenomeGraph.getNumNodes();
+                if (useCharacterGraphs) {
+                    d_connectedComponentsRowOffsets[baseIdx] = d_connectedComponentsRowOffsetsBase + baseIdx * (pangenomeGraph.getNumNodes() + 1);
+                    d_connectedComponentsColumnValues[baseIdx] = d_connectedComponentsColumnValuesBase + connectedComponentsEdgesCounter;
+                    connectedComponentsEdgesCounter += connectedComponentsNumEdges[baseIdx];
+                }
+                connectedComponentsCounter += (numConnectedComponents[baseIdx] + 1);
+            }
         }
         const auto d_costsDoubleBuffer{costsDoubleBuffer.copyToDevice(&d_instance->costsDoubleBuffer, allocator)};
         const auto d_scores{allocator->cudaEmplaceCopy<::std::remove_pointer_t<decltype(scores)>>(scores, ::cudaMemcpyHostToDevice, numScores, false, cudaStreamDefault)};
@@ -295,7 +301,7 @@ namespace cuSGA {
         }
     }
 
-    __host__ cost_t* SequenceGraph::connectedComponentsAlign(const ::std::string& sequenceFileName) {
+    __host__ cost_t* SequenceGraph::connectedComponentsAlign(const ::std::string& sequenceFileName, const bool useCharacterGraphs) {
         // Open file
         ::std::ifstream sequenceFile{sequenceFileName};
         if (!sequenceFile.is_open()) {
@@ -311,7 +317,7 @@ namespace cuSGA {
         }
 
         // Copy sequence graph instance to device
-        copyToDevice();
+        copyToDevice(true, useCharacterGraphs);
 
         // Allocate additional device buffers
         connectedComponentSize_t maxNumConnectedComponents{0};
@@ -349,7 +355,7 @@ namespace cuSGA {
                 substitutions(layerIdx, d_needsVisiting);
 
                 // Perform insertions and propagations for the given layer (early return if last layer)
-                insertionsAndPropagations(layerIdx, d_buffers, d_needsVisiting);
+                insertionsAndPropagations(layerIdx, d_buffers, d_needsVisiting, useCharacterGraphs);
 
                 // Swap costs double buffer for the next layer (unless last layer)
                 if (layerIdx < sequence.getNumBases() - 1) {
@@ -393,7 +399,7 @@ namespace cuSGA {
         }
 
         // Copy sequence graph instance to device
-        copyToDevice();
+        copyToDevice(false, false);
 
         // Allocate additional device buffers
         nodeSize_t* d_frontierBufferSize11{nullptr};
@@ -474,7 +480,7 @@ namespace cuSGA {
         }
 
         // Copy sequence graph instance to device
-        copyToDevice();
+        copyToDevice(false, false);
 
         // Allocate additional device buffers
         nodeSize_t* d_frontierBufferSize11{nullptr};

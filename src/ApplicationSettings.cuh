@@ -28,16 +28,19 @@ namespace cuSGA::ApplicationSettings {
     inline constexpr ::std::string CONNECTED_COMPONENTS_FILE_NAME_SUFFIXES[]{"-components-A", "-components-C", "-components-G", "-components-T"};
 
     // Alignment version
+    inline constexpr auto USE_CHARACTER_GRAPHS_FLAG{"--character-graphs"};
+    inline constexpr auto USE_CHARACTER_GRAPHS_FLAG_DESCRIPTION{"Enable the use of Character Graphs for the Connected Components level Alignment Algorithm. This will increase Memory Usage by a lot, but might also help boost performance. It is currently unknown the extent to which this could have an effect, so use with caution."};
     inline constexpr auto USE_GLOBAL_FRONTIER_FLAG{"--global-frontier"};
-    inline constexpr auto USE_GLOBAL_FRONTIER_FLAG_DESCRIPTION{"The Alignment Algorithm type to use: Connected Components level (DEFAULT) or Grid level (enabled by setting this flag). Grid level Alignment is in general more consistent, as it doesn't rely on Connected Components. Connected Components level Alignment, however, appears to be slightly more performant."};
+    inline constexpr auto USE_GLOBAL_FRONTIER_FLAG_DESCRIPTION{"Enable Grid level Alignment with Cooperative Groups, which is in general more consistent (as it doesn't rely on Connected Components), but also appears to be slightly less performant."};
     inline constexpr auto USE_BLOCK_AGGREGATION_FLAG{"--block-aggregation"};
-    inline constexpr auto USE_BLOCK_AGGREGATION_FLAG_DESCRIPTION{"Enable Block Aggregation for the Grid level Alignment Algorithm. This is recommended to boost performance if the Graph Size is very big."};
+    inline constexpr auto USE_BLOCK_AGGREGATION_FLAG_DESCRIPTION{"Enable Block Aggregation for the Grid level Alignment Algorithm. This is recommended to boost performance in cases where the Graph Size is very large."};
 
     // Parsed arguments struct
     struct ParsedArguments {
         ::std::string sequenceFileName{};
         ::std::string pangenomeGraphFileName{};
         ::std::string connectedComponentsFileNames[NUM_BASES]{};
+        bool useCharacterGraphs{false};
         bool useGlobalFrontier{false};
         bool useBlockAggregation{false};
     };
@@ -58,6 +61,7 @@ namespace cuSGA::ApplicationSettings {
         // Configure application arguments
         app.add_option(SEQUENCE_FILE_NAME_FLAG, parsedArguments.sequenceFileName, SEQUENCE_FILE_NAME_DESCRIPTION)->required();
         app.add_option(PANGENOME_GRAPH_FILE_NAME_FLAG, parsedArguments.pangenomeGraphFileName, PANGENOME_GRAPH_FILE_NAME_DESCRIPTION)->required();
+        app.add_flag(USE_CHARACTER_GRAPHS_FLAG, parsedArguments.useCharacterGraphs, USE_CHARACTER_GRAPHS_FLAG_DESCRIPTION);
         app.add_flag(USE_GLOBAL_FRONTIER_FLAG, parsedArguments.useGlobalFrontier, USE_GLOBAL_FRONTIER_FLAG_DESCRIPTION);
         app.add_flag(USE_BLOCK_AGGREGATION_FLAG, parsedArguments.useBlockAggregation, USE_BLOCK_AGGREGATION_FLAG_DESCRIPTION);
         const auto connectedComponentsFileNamesOption{app.add_option(CONNECTED_COMPONENTS_FILE_NAMES_FLAG, connectedComponentsFileNamesVector, CONNECTED_COMPONENTS_FILE_NAMES_DESCRIPTION)->expected(1, NUM_BASES)};

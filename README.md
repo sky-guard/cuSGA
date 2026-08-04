@@ -136,6 +136,8 @@ To align a sequence using **Connected Components level Synchronization (DEFAULT)
 ./cuSGA -s SEQUENCE_FILE -p PANGENOME_GRAPH_FILE -c CONNECTED_COMPONENTS_FILE_PREFIX
 ```
 
+***NOTE**: Additionally, **use the ```--character-graphs``` flag to enable the Usage of Character Graphs in the Insertions and Propagations Phase**. By default, the full Pangenome Graph will be used. This is because, **although Character Graphs should have around ~25% less Edges, it may not prove to be at all beneficient for this version of the Algorithm**, which is limited by the Maximum Number of Neighbors of a Nodes in the same Warp. Thus, no real benefit is guaranteed.*
+
 ***NOTE**: When running this version of the Algorithm, **it is highly recommended to perform a preliminary step of Connected Components Compaction**. This is because this version of the Algorithm is sensitive to the Sizes of the Connected Components: if the average size is too small, Threads in a Warp may end up being not utilized enough or at all. Average Speedup achieved with an Average Connected Components Size of ~4 Nodes was around ~11.2x, while with an Average Connected Components Size of ~32 Nodes it was around ~13.6x. Meanwhile, **the Peak Speedup of 14.6x was achieved with an Average Connected Components Size of ~1200 Nodes**. This, however, is meant as a **suggestion** and is **not guaranteed to be the ideal target size**.*
 
 To align a sequence using **Grid level Synchronization with Cooperative Groups** and print the resulting Alignment Scores, please run the following command:
@@ -199,6 +201,8 @@ cuSGA expects the following Input Files:
   ```
   CONNECTED_COMPONENTS_FILE_NAMES_PREFIX-components-{A,C,G,T}
   ```
+  
+  ***NOTE**: Some of the information above may not be required according to the version of the Algorithm that is used, and can thus be omitted. For more information, please read [Build & Usage](#build--usage).* 
 
 ---
 
