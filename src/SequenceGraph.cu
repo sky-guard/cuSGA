@@ -437,7 +437,7 @@ namespace cuSGA {
                 substitutions(layerIdx, d_needsVisiting);
 
                 // Perform insertions and propagations for the given layer (early return if last layer)
-                insertionsAndPropagations(layerIdx, d_buffers, d_needsVisiting);
+                characterGraphsInsertionsAndPropagations(layerIdx, d_buffers, d_needsVisiting);
 
                 // Swap costs double buffer for the next layer (unless last layer)
                 if (layerIdx < sequence.getNumBases() - 1) {
@@ -926,6 +926,11 @@ namespace cuSGA {
             *(shared_queueSize1 + laneIdx) = 0;
         }
 
+        // Empty frontier queue
+        for (nodeSize_t queuePackIdx{laneIdx}; queuePackIdx < packedQueueSize; queuePackIdx += KernelUtils::WARP_SIZE) {
+            shared_isInQueue[queuePackIdx] = 0;
+        }
+
         // Synchronize warp
         ::__syncwarp();
 
@@ -953,10 +958,13 @@ namespace cuSGA {
                 break;
             }
 
-            // Empty frontier queue if necessary
+            // Empty frontier queue
             for (nodeSize_t queuePackIdx{laneIdx}; queuePackIdx < packedQueueSize; queuePackIdx += KernelUtils::WARP_SIZE) {
                 shared_isInQueue[queuePackIdx] = 0;
             }
+
+            // Synchronize warp
+            ::__syncwarp();
 
             // Get frontier buffers
             const auto* __restrict__ const shared_frontierBuffer{(selector)? shared_queueBuffer1 : shared_queueBuffer2};
@@ -987,9 +995,6 @@ namespace cuSGA {
                 // Process node
                 processNode(shared_queueBuffer, d_queueBuffer, shared_queueSize, shared_deviceQueueSize, shared_isInQueue, d_currentCosts, d_neighborOffsets, d_neighborValues, d_connectedComponentLocalIndexMappings, nodeIdx);
             }
-
-            // Synchronize warp
-            ::__syncwarp();
 
             // Flush current size
             if (laneIdx < 2) {
