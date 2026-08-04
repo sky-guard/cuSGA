@@ -301,7 +301,7 @@ namespace cuSGA {
         }
     }
 
-    __host__ cost_t* SequenceGraph::connectedComponentsAlign(const ::std::string& sequenceFileName, const bool useCharacterGraphs) {
+    __host__ cost_t* SequenceGraph::connectedComponentsAlign(const ::std::string& sequenceFileName) {
         // Open file
         ::std::ifstream sequenceFile{sequenceFileName};
         if (!sequenceFile.is_open()) {
@@ -317,7 +317,7 @@ namespace cuSGA {
         }
 
         // Copy sequence graph instance to device
-        copyToDevice(true, useCharacterGraphs);
+        copyToDevice(true, false);
 
         // Allocate additional device buffers
         connectedComponentSize_t maxNumConnectedComponents{0};
@@ -355,7 +355,89 @@ namespace cuSGA {
                 substitutions(layerIdx, d_needsVisiting);
 
                 // Perform insertions and propagations for the given layer (early return if last layer)
-                insertionsAndPropagations(layerIdx, d_buffers, d_needsVisiting, useCharacterGraphs);
+                insertionsAndPropagations(layerIdx, d_buffers, d_needsVisiting);
+
+                // Swap costs double buffer for the next layer (unless last layer)
+                if (layerIdx < sequence.getNumBases() - 1) {
+                    pinned_instance->costsDoubleBuffer.swap();
+                }
+            }
+
+            // Compute minimum cost
+            minCost(scoreIdx);
+
+            // Move to the next score
+            ++scoreIdx;
+        }
+
+        // Close file
+        sequenceFile.close();
+
+        // Copy over scores from device
+        const auto scores{h2d_getScores()};
+
+        // Free additional device buffers
+        ::cudaFreeAsync(d_buffers, cudaStreamDefault);
+        ::cudaFreeAsync(d_needsVisiting, cudaStreamDefault);
+
+        return scores;
+    }
+
+    __host__ cost_t* SequenceGraph::connectedComponentsCharacterGraphsAlign(const ::std::string& sequenceFileName) {
+        // Open file
+        ::std::ifstream sequenceFile{sequenceFileName};
+        if (!sequenceFile.is_open()) {
+            throw ::std::runtime_error{::std::format("Unable to open file: {}", sequenceFileName)};
+        }
+
+        // Read and skip number of scores and max sequence length
+        if (scoreSize_t numScores{0}; !(sequenceFile >> numScores)) {
+            throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", sequenceFileName)};
+        }
+        if (sequenceSize_t maxSequenceLength{0}; !(sequenceFile >> maxSequenceLength)) {
+            throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", sequenceFileName)};
+        }
+
+        // Copy sequence graph instance to device
+        copyToDevice(true, true);
+
+        // Allocate additional device buffers
+        connectedComponentSize_t maxNumConnectedComponents{0};
+#pragma unroll
+        for (DNABase_t baseIdx{0}; baseIdx < NUM_BASES; ++baseIdx) {
+            maxNumConnectedComponents = ::std::max(maxNumConnectedComponents, numConnectedComponents[baseIdx]);
+        }
+        nodeSize_t* d_buffers{nullptr};
+        CUDA_CHECK(::cudaMallocAsync(&d_buffers, DoubleBuffer<nodeSize_t>::NUM_DOUBLE_BUFFERS * pangenomeGraph.getNumNodes() * sizeof(nodeSize_t), cudaStreamDefault));
+        bool* d_needsVisiting{nullptr};
+        CUDA_CHECK(::cudaMallocAsync(&d_needsVisiting, maxNumConnectedComponents * sizeof(bool), cudaStreamDefault));
+        CUDA_CHECK(::cudaMemsetAsync(d_needsVisiting, 0, maxNumConnectedComponents * sizeof(bool), cudaStreamDefault));
+
+        // Loop over all sequences in the input file
+        scoreSize_t scoreIdx{0};
+        while (sequence.readFromFile(sequenceFileName, &sequenceFile)) {
+            // Check for non-empty sequence
+            if (sequence.getNumBases() == 0) {
+                throw ::std::runtime_error{"Unable to align an empty sequence!"};
+            }
+
+            // Perform initialization step
+            initialize();
+
+            // Swap costs double buffer for the next layer
+            pinned_instance->costsDoubleBuffer.swap();
+
+            // Solve alignment layer by layer
+            const auto numBases{sequence.getNumBases()};
+            for (sequenceSize_t layerIdx{1}; layerIdx < numBases; ++layerIdx) {
+                // Perform deletions for the given layer
+                deletions();
+
+                // Perform substitutions for the given layer
+                substitutions(layerIdx, d_needsVisiting);
+
+                // Perform insertions and propagations for the given layer (early return if last layer)
+                insertionsAndPropagations(layerIdx, d_buffers, d_needsVisiting);
 
                 // Swap costs double buffer for the next layer (unless last layer)
                 if (layerIdx < sequence.getNumBases() - 1) {

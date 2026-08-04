@@ -310,7 +310,9 @@ namespace cuSGA {
         }
 
         // Align sequence using connected components
-        __host__ cost_t* connectedComponentsAlign(const ::std::string& sequenceFileName, bool useCharacterGraphs);
+        __host__ cost_t* connectedComponentsAlign(const ::std::string& sequenceFileName);
+        // Align sequence using connected components and character graphs
+        __host__ cost_t* connectedComponentsCharacterGraphsAlign(const ::std::string& sequenceFileName);
         // Align sequence using grid
         __host__ cost_t* gridAlign(const ::std::string& sequenceFileName);
         // Align sequence using grid (with block aggregation)
@@ -393,7 +395,7 @@ namespace cuSGA {
         }
 
         // Launch insertions and propagations kernel
-        __host__ __forceinline__ void insertionsAndPropagations(const sequenceSize_t layerIdx, nodeSize_t* const d_buffers, bool* const d_needsVisiting, const bool useCharacterGraphs) const {
+        __host__ __forceinline__ void insertionsAndPropagations(const sequenceSize_t layerIdx, nodeSize_t* const d_buffers, bool* const d_needsVisiting) const {
             // Cached block sizes
             static int cachedBlockSizes[NUM_BASES]{};
 
@@ -430,7 +432,48 @@ namespace cuSGA {
 
             // Launch kernel
             const auto maxConnectedComponentSize{maxConnectedComponentsSizes[static_cast<DNABase_t>(sequenceBase)]};
-            KernelUtils::cudaLaunchKernel<SequenceGraphKernels::insertionsAndPropagations>(gridSize, blockSize, dynamicSMemSize, cudaStreamDefault, (useCharacterGraphs)? pinned_instance->connectedComponentsRowOffsets[static_cast<DNABase_t>(sequenceBase)] : pinned_instance->pangenomeGraph.getNeighborOffsets(), (useCharacterGraphs)? pinned_instance->connectedComponentsColumnValues[static_cast<DNABase_t>(sequenceBase)] : pinned_instance->pangenomeGraph.getNeighborValues(), pinned_instance->connectedComponentsOffsets[static_cast<DNABase_t>(sequenceBase)], pinned_instance->connectedComponentsMappings[static_cast<DNABase_t>(sequenceBase)], pinned_instance->connectedComponentsLocalIndexMappings[static_cast<DNABase_t>(sequenceBase)], pinned_instance->costsDoubleBuffer.current(), d_buffers, d_needsVisiting, numWarpsPerBlock, numConnectedComponents, maxConnectedComponentSize, layerIdx == (sequence.getNumBases() - 1));
+            KernelUtils::cudaLaunchKernel<SequenceGraphKernels::insertionsAndPropagations>(gridSize, blockSize, dynamicSMemSize, cudaStreamDefault, pinned_instance->pangenomeGraph.getNeighborOffsets(), pinned_instance->pangenomeGraph.getNeighborValues(), pinned_instance->connectedComponentsOffsets[static_cast<DNABase_t>(sequenceBase)], pinned_instance->connectedComponentsMappings[static_cast<DNABase_t>(sequenceBase)], pinned_instance->connectedComponentsLocalIndexMappings[static_cast<DNABase_t>(sequenceBase)], pinned_instance->costsDoubleBuffer.current(), d_buffers, d_needsVisiting, numWarpsPerBlock, numConnectedComponents, maxConnectedComponentSize, layerIdx == (sequence.getNumBases() - 1));
+        }
+
+        // Launch insertions and propagations kernel
+        __host__ __forceinline__ void characterGraphsInsertionsAndPropagations(const sequenceSize_t layerIdx, nodeSize_t* const d_buffers, bool* const d_needsVisiting) const {
+            // Cached block sizes
+            static int cachedBlockSizes[NUM_BASES]{};
+
+            // Define shared memory calculator
+            const auto sequenceBase{sequence[layerIdx]};
+            const auto maxConnectedComponentsSize{maxConnectedComponentsSizes[static_cast<DNABase_t>(sequenceBase)]};
+            const auto SMemCalculator = [maxConnectedComponentsSize] __host__ __device__ (const targetSize_t blockSize) {
+                // Get number of warps in the block
+                const auto numWarps{(blockSize + KernelUtils::WARP_SIZE - 1) >> KernelUtils::WARP_SHIFT};
+
+                return numWarps * (SequenceGraphKernels::INS_NUM_SIZES * sizeof(nodeSize_t) + DoubleBuffer<nodeSize_t>::NUM_DOUBLE_BUFFERS * SequenceGraphKernels::INS_SHARED_FRONTIER_BUFFER_SIZE * sizeof(nodeSize_t) + ((maxConnectedComponentsSize + Frontier::PACKING_FACTOR - 1) >> Frontier::PACK_SHIFT) * sizeof(queuePack_t));
+            };
+
+            // Check if block size has already been computed for the given DNA base
+            auto blockSize{cachedBlockSizes[static_cast<DNABase_t>(sequenceBase)]};
+            if (!blockSize) {
+                // Get block size and round it down to be a multiple of WARP_SIZE
+                int minGridSize{0};
+                CUDA_CHECK(::cudaOccupancyMaxPotentialBlockSizeVariableSMem(&minGridSize, &blockSize, SequenceGraphKernels::insertionsAndPropagations, SMemCalculator, 0));
+                blockSize &= ~(KernelUtils::WARP_SIZE - 1);
+                blockSize = (blockSize < KernelUtils::WARP_SIZE)? KernelUtils::WARP_SIZE : blockSize;
+
+                // Cache block size
+                cachedBlockSizes[static_cast<DNABase_t>(sequenceBase)] = blockSize;
+            }
+
+            // Get grid size (one warp per connected component)
+            const auto numConnectedComponents{this->numConnectedComponents[static_cast<::size_t>(sequenceBase)]};
+            const auto numWarpsPerBlock{(blockSize + KernelUtils::WARP_SIZE - 1) >> KernelUtils::WARP_SHIFT};
+            const auto gridSize{KernelUtils::cudaSizeGrid(numConnectedComponents, numWarpsPerBlock)};
+
+            // Get dynamic shared memory size
+            const auto dynamicSMemSize{SMemCalculator(blockSize)};
+
+            // Launch kernel
+            const auto maxConnectedComponentSize{maxConnectedComponentsSizes[static_cast<DNABase_t>(sequenceBase)]};
+            KernelUtils::cudaLaunchKernel<SequenceGraphKernels::insertionsAndPropagations>(gridSize, blockSize, dynamicSMemSize, cudaStreamDefault, pinned_instance->connectedComponentsRowOffsets[static_cast<DNABase_t>(sequenceBase)], pinned_instance->connectedComponentsColumnValues[static_cast<DNABase_t>(sequenceBase)], pinned_instance->connectedComponentsOffsets[static_cast<DNABase_t>(sequenceBase)], pinned_instance->connectedComponentsMappings[static_cast<DNABase_t>(sequenceBase)], pinned_instance->connectedComponentsLocalIndexMappings[static_cast<DNABase_t>(sequenceBase)], pinned_instance->costsDoubleBuffer.current(), d_buffers, d_needsVisiting, numWarpsPerBlock, numConnectedComponents, maxConnectedComponentSize, layerIdx == (sequence.getNumBases() - 1));
         }
 
         // Launch cooperative insertions and propagations kernel

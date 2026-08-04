@@ -25,8 +25,11 @@ int main(const int argc, const char* const argv[]) {
         else if (parsedArguments.useBlockAggregation) {
             scores = sequenceGraph.gridBlockAggregationAlign(parsedArguments.sequenceFileName);
         }
+        else if (parsedArguments.useCharacterGraphs) {
+            scores = sequenceGraph.connectedComponentsCharacterGraphsAlign(parsedArguments.sequenceFileName);
+        }
         else {
-            scores = sequenceGraph.connectedComponentsAlign(parsedArguments.sequenceFileName, parsedArguments.useCharacterGraphs);
+            scores = sequenceGraph.connectedComponentsAlign(parsedArguments.sequenceFileName);
         }
 
         // Print results
