@@ -80,6 +80,12 @@ namespace cuSGA {
             // Grow size for connected components local index mappings
             allocator->grow<::std::remove_reference_t<decltype(connectedComponentsLocalIndexMappings[0])>>(NUM_BASES * numNodes);
 
+            // Grow size for connected components row offsets
+            allocator->grow<::std::remove_reference_t<decltype(connectedComponentsRowOffsets[0])>>(NUM_BASES * (numNodes + 1));
+
+            // Grow size for connected components column values
+            allocator->grow<::std::remove_reference_t<decltype(connectedComponentsColumnValues[0])>>(NUM_BASES * numEdges);
+
             // Grow size for costs double buffer
             DoubleBuffer<cost_t>::growBuffers(allocator, numNodes);
 
@@ -105,6 +111,12 @@ namespace cuSGA {
             // Grow size for connected components local index mappings
             allocator->grow<::std::remove_reference_t<decltype(connectedComponentsLocalIndexMappings[0])>>(NUM_BASES * numNodes);
 
+            // Grow size for connected components row offsets
+            allocator->grow<::std::remove_reference_t<decltype(connectedComponentsRowOffsets[0])>>(NUM_BASES * (numNodes + 1));
+
+            // Grow size for connected components column values
+            allocator->grow<::std::remove_reference_t<decltype(connectedComponentsColumnValues[0])>>(NUM_BASES * numEdges);
+
             // Grow size for costs double buffer
             DoubleBuffer<cost_t>::growBuffers(allocator, numNodes);
 
@@ -115,10 +127,10 @@ namespace cuSGA {
         // Default constructor
         SequenceGraph() = default;
         // Parameterized constructor
-        __host__ SequenceGraph(const ::std::string& pangenomeGraphFileName, const ::std::string& sequenceFileName, ::std::string const (& connectedComponentsFileNames)[NUM_BASES], bool ownsInstance, SequenceGraph* pinned_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
+        __host__ SequenceGraph(const ::std::string& pangenomeGraphFileName, const ::std::string& sequenceFileName, ::std::string const (& connectedComponentsFileNames)[NUM_BASES], bool readConnectedComponents, bool ownsInstance, SequenceGraph* pinned_instanceOptional = nullptr, KernelUtils::BumpPtrAllocator* allocatorOptional = nullptr);
 
         // Sequence graph constructor
-        __host__ __device__ __forceinline__ SequenceGraph(const PangenomeGraph& pangenomeGraph, const PackedDNASequence& sequence, connectedComponentSize_t const (& numConnectedComponents)[NUM_BASES], nodeSize_t* const (& connectedComponentsOffsets)[NUM_BASES], nodeSize_t* const (& connectedComponentsMappings)[NUM_BASES], connectedComponentSize_t* const (& connectedComponentsReverseMappings)[NUM_BASES], connectedComponentSize_t* const (& connectedComponentsLocalIndexMappings)[NUM_BASES], connectedComponentSize_t const (& maxConnectedComponentsSizes)[NUM_BASES], const DoubleBuffer<cost_t>& costsDoubleBuffer, const scoreSize_t numScores, cost_t* const scores, const bool ownsInstance, SequenceGraph* const pinned_instance = nullptr, SequenceGraph* const d_instance = nullptr) : pangenomeGraph{pangenomeGraph}, sequence{sequence}, costsDoubleBuffer{costsDoubleBuffer}, numScores{numScores}, scores{scores}, ownsInstance{ownsInstance}, pinned_instance{pinned_instance}, d_instance{d_instance} {
+        __host__ __device__ __forceinline__ SequenceGraph(const PangenomeGraph& pangenomeGraph, const PackedDNASequence& sequence, connectedComponentSize_t const (& numConnectedComponents)[NUM_BASES], nodeSize_t* const (& connectedComponentsOffsets)[NUM_BASES], nodeSize_t* const (& connectedComponentsMappings)[NUM_BASES], connectedComponentSize_t* const (& connectedComponentsReverseMappings)[NUM_BASES], connectedComponentSize_t* const (& connectedComponentsLocalIndexMappings)[NUM_BASES], connectedComponentSize_t const (& maxConnectedComponentsSizes)[NUM_BASES], edgeSize_t const (& connectedComponentsNumEdges)[NUM_BASES], edgeSize_t* const (& connectedComponentsRowOffsets)[NUM_BASES], nodeSize_t* const (& connectedComponentsColumnValues)[NUM_BASES], const DoubleBuffer<cost_t>& costsDoubleBuffer, const scoreSize_t numScores, cost_t* const scores, const bool ownsInstance, SequenceGraph* const pinned_instance = nullptr, SequenceGraph* const d_instance = nullptr) : pangenomeGraph{pangenomeGraph}, sequence{sequence}, costsDoubleBuffer{costsDoubleBuffer}, numScores{numScores}, scores{scores}, ownsInstance{ownsInstance}, pinned_instance{pinned_instance}, d_instance{d_instance} {
 #pragma unroll
             for (DNABase_t baseIdx{0}; baseIdx < NUM_BASES; ++baseIdx) {
                 // Set number of connected components
@@ -138,6 +150,15 @@ namespace cuSGA {
 
                 // Set max connected components sizes
                 this->maxConnectedComponentsSizes[baseIdx] = maxConnectedComponentsSizes[baseIdx];
+
+                // Set connected component num edges
+                this->connectedComponentsNumEdges[baseIdx] = connectedComponentsNumEdges[baseIdx];
+
+                // Set connected component row offsets
+                this->connectedComponentsRowOffsets[baseIdx] = connectedComponentsRowOffsets[baseIdx];
+
+                // Set connected component column values
+                this->connectedComponentsColumnValues[baseIdx] = connectedComponentsColumnValues[baseIdx];
             }
         }
 
@@ -192,14 +213,29 @@ namespace cuSGA {
             return connectedComponentsReverseMappings[static_cast<DNABase_t>(characterGraphBase)][nodeIdx];
         }
 
+        // Get connected component local index mapping for a given character graph DNA base and node index
+        __host__ __device__ __forceinline__ connectedComponentSize_t getConnectedComponentLocalIndexMapping(const DNABase characterGraphBase, const nodeSize_t nodeIdx) const {
+            return connectedComponentsLocalIndexMappings[static_cast<DNABase_t>(characterGraphBase)][nodeIdx];
+        }
+
         // Get max connected component size for a given character graph DNA base
         __host__ __device__ __forceinline__ connectedComponentSize_t getMaxConnectedComponentSize(const DNABase characterGraphBase) const {
             return maxConnectedComponentsSizes[static_cast<DNABase_t>(characterGraphBase)];
         }
 
-        // Get connected component local index mapping for a given character graph DNA base and node index
-        __host__ __device__ __forceinline__ connectedComponentSize_t getConnectedComponentLocalIndexMapping(const DNABase characterGraphBase, const nodeSize_t nodeIdx) const {
-            return connectedComponentsLocalIndexMappings[static_cast<DNABase_t>(characterGraphBase)][nodeIdx];
+        // Get connected component number of edges for a given character graph DNA base
+        __host__ __device__ __forceinline__ edgeSize_t getConnectedComponentNumEdges(const DNABase characterGraphBase) const {
+            return connectedComponentsNumEdges[static_cast<DNABase_t>(characterGraphBase)];
+        }
+
+        // Get connected component row offsets for a given character graph DNA base
+        __host__ __device__ __forceinline__ edgeSize_t* getConnectedComponentRowOffsets(const DNABase characterGraphBase) const {
+            return connectedComponentsRowOffsets[static_cast<DNABase_t>(characterGraphBase)];
+        }
+
+        // Get connected component column values for a given character graph DNA base
+        __host__ __device__ __forceinline__ nodeSize_t* getConnectedComponentColumnValues(const DNABase characterGraphBase) const {
+            return connectedComponentsColumnValues[static_cast<DNABase_t>(characterGraphBase)];
         }
 
         // Get costs double buffer
@@ -253,6 +289,9 @@ namespace cuSGA {
                 this->connectedComponentsReverseMappings[baseIdx] = reinterpret_cast<::std::remove_reference_t<decltype(connectedComponentsReverseMappings[0])>>(::__shfl_sync(mask, reinterpret_cast<unsigned long long>(connectedComponentsReverseMappings[baseIdx]), srcLaneIdx));
                 this->connectedComponentsLocalIndexMappings[baseIdx] = reinterpret_cast<::std::remove_reference_t<decltype(connectedComponentsLocalIndexMappings[0])>>(::__shfl_sync(mask, reinterpret_cast<unsigned long long>(connectedComponentsLocalIndexMappings[baseIdx]), srcLaneIdx));
                 this->maxConnectedComponentsSizes[baseIdx] = ::__shfl_sync(mask, maxConnectedComponentsSizes[baseIdx], srcLaneIdx);
+                this->connectedComponentsNumEdges[baseIdx] = ::__shfl_sync(mask, connectedComponentsNumEdges[baseIdx], srcLaneIdx);
+                this->connectedComponentsRowOffsets[baseIdx] = reinterpret_cast<::std::remove_reference_t<decltype(connectedComponentsRowOffsets[0])>>(::__shfl_sync(mask, reinterpret_cast<unsigned long long>(connectedComponentsRowOffsets[baseIdx]), srcLaneIdx));
+                this->connectedComponentsColumnValues[baseIdx] = reinterpret_cast<::std::remove_reference_t<decltype(connectedComponentsColumnValues[0])>>(::__shfl_sync(mask, reinterpret_cast<unsigned long long>(connectedComponentsColumnValues[baseIdx]), srcLaneIdx));
             }
             this->costsDoubleBuffer.shuffle_sync(mask, srcLaneIdx);
             this->numScores = ::__shfl_sync(mask, numScores, srcLaneIdx);
@@ -367,7 +406,7 @@ namespace cuSGA {
                 int minGridSize{0};
                 CUDA_CHECK(::cudaOccupancyMaxPotentialBlockSizeVariableSMem(&minGridSize, &blockSize, SequenceGraphKernels::insertionsAndPropagations, SMemCalculator, 0));
                 blockSize &= ~(KernelUtils::WARP_SIZE - 1);
-                blockSize = (blockSize < KernelUtils::WARP_SIZE) ? KernelUtils::WARP_SIZE : blockSize;
+                blockSize = (blockSize < KernelUtils::WARP_SIZE)? KernelUtils::WARP_SIZE : blockSize;
 
                 // Cache block size
                 cachedBlockSizes[static_cast<DNABase_t>(sequenceBase)] = blockSize;
@@ -383,7 +422,7 @@ namespace cuSGA {
 
             // Launch kernel
             const auto maxConnectedComponentSize{maxConnectedComponentsSizes[static_cast<DNABase_t>(sequenceBase)]};
-            KernelUtils::cudaLaunchKernel<SequenceGraphKernels::insertionsAndPropagations>(gridSize, blockSize, dynamicSMemSize, cudaStreamDefault, pinned_instance->pangenomeGraph.getNeighborOffsets(), pinned_instance->pangenomeGraph.getNeighborValues(), pinned_instance->connectedComponentsOffsets[static_cast<DNABase_t>(sequenceBase)], pinned_instance->connectedComponentsMappings[static_cast<DNABase_t>(sequenceBase)], pinned_instance->connectedComponentsLocalIndexMappings[static_cast<DNABase_t>(sequenceBase)], pinned_instance->costsDoubleBuffer.current(), d_buffers, d_needsVisiting, numWarpsPerBlock, numConnectedComponents, maxConnectedComponentSize, layerIdx == sequence.getNumBases() - 1);
+            KernelUtils::cudaLaunchKernel<SequenceGraphKernels::insertionsAndPropagations>(gridSize, blockSize, dynamicSMemSize, cudaStreamDefault, pinned_instance->connectedComponentsRowOffsets[static_cast<DNABase_t>(sequenceBase)], pinned_instance->connectedComponentsColumnValues[static_cast<DNABase_t>(sequenceBase)], pinned_instance->connectedComponentsOffsets[static_cast<DNABase_t>(sequenceBase)], pinned_instance->connectedComponentsMappings[static_cast<DNABase_t>(sequenceBase)], pinned_instance->connectedComponentsLocalIndexMappings[static_cast<DNABase_t>(sequenceBase)], pinned_instance->costsDoubleBuffer.current(), d_buffers, d_needsVisiting, numWarpsPerBlock, numConnectedComponents, maxConnectedComponentSize, layerIdx == (sequence.getNumBases() - 1));
         }
 
         // Launch cooperative insertions and propagations kernel
@@ -411,7 +450,7 @@ namespace cuSGA {
             const auto gridSize{cachedGridSizes[static_cast<DNABase_t>(sequenceBase)]};
 
             // Launch kernel
-            KernelUtils::cudaLaunchCooperativeKernel<SequenceGraphKernels::cooperativeInsertionsAndPropagations>(gridSize, blockSize, 0, cudaStreamDefault, pinned_instance->pangenomeGraph.getNeighborOffsets(), pinned_instance->pangenomeGraph.getNeighborValues(), pinned_instance->costsDoubleBuffer.current(), d_frontierBuffer1, d_frontierBuffer2, d_frontierQueue1, d_frontierQueue2, d_frontierBufferSize11, d_frontierBufferSize12, d_frontierBufferSize21, d_frontierBufferSize22, layerIdx == sequence.getNumBases() - 1);
+            KernelUtils::cudaLaunchCooperativeKernel<SequenceGraphKernels::cooperativeInsertionsAndPropagations>(gridSize, blockSize, 0, cudaStreamDefault, pinned_instance->pangenomeGraph.getNeighborOffsets(), pinned_instance->pangenomeGraph.getNeighborValues(), pinned_instance->costsDoubleBuffer.current(), d_frontierBuffer1, d_frontierBuffer2, d_frontierQueue1, d_frontierQueue2, d_frontierBufferSize11, d_frontierBufferSize12, d_frontierBufferSize21, d_frontierBufferSize22, layerIdx == (sequence.getNumBases() - 1));
         }
 
         // Launch cooperative insertions and propagations kernel (with block aggregation)
@@ -439,7 +478,7 @@ namespace cuSGA {
             const auto gridSize{cachedGridSizes[static_cast<DNABase_t>(sequenceBase)]};
 
             // Launch kernel
-            KernelUtils::cudaLaunchCooperativeKernel<SequenceGraphKernels::cooperativeBlockAggregationInsertionsAndPropagations>(gridSize, blockSize, 0, cudaStreamDefault, pinned_instance->pangenomeGraph.getNeighborOffsets(), pinned_instance->pangenomeGraph.getNeighborValues(), pinned_instance->costsDoubleBuffer.current(), d_frontierBuffer1, d_frontierBuffer2, d_frontierQueue1, d_frontierQueue2, d_frontierBufferSize11, d_frontierBufferSize12, d_frontierBufferSize21, d_frontierBufferSize22, layerIdx == sequence.getNumBases() - 1);
+            KernelUtils::cudaLaunchCooperativeKernel<SequenceGraphKernels::cooperativeBlockAggregationInsertionsAndPropagations>(gridSize, blockSize, 0, cudaStreamDefault, pinned_instance->pangenomeGraph.getNeighborOffsets(), pinned_instance->pangenomeGraph.getNeighborValues(), pinned_instance->costsDoubleBuffer.current(), d_frontierBuffer1, d_frontierBuffer2, d_frontierQueue1, d_frontierQueue2, d_frontierBufferSize11, d_frontierBufferSize12, d_frontierBufferSize21, d_frontierBufferSize22, layerIdx == (sequence.getNumBases() - 1));
         }
 
         // Launch min cost kernel
@@ -489,6 +528,9 @@ namespace cuSGA {
         connectedComponentSize_t* connectedComponentsReverseMappings[NUM_BASES]{nullptr};
         connectedComponentSize_t* connectedComponentsLocalIndexMappings[NUM_BASES]{nullptr};
         connectedComponentSize_t maxConnectedComponentsSizes[NUM_BASES]{};
+        edgeSize_t connectedComponentsNumEdges[NUM_BASES]{};
+        edgeSize_t* connectedComponentsRowOffsets[NUM_BASES]{nullptr};
+        nodeSize_t* connectedComponentsColumnValues[NUM_BASES]{nullptr};
         DoubleBuffer<cost_t> costsDoubleBuffer{};
         scoreSize_t numScores{0};
         cost_t* scores{nullptr};

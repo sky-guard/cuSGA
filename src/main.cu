@@ -15,7 +15,7 @@ int main(const int argc, const char* const argv[]) {
         }
 
         // Create sequence graph instance
-        auto sequenceGraph{::cuSGA::SequenceGraph{parsedArguments.pangenomeGraphFileName, parsedArguments.sequenceFileName, parsedArguments.connectedComponentsFileNames, true}};
+        auto sequenceGraph{::cuSGA::SequenceGraph{parsedArguments.pangenomeGraphFileName, parsedArguments.sequenceFileName, parsedArguments.connectedComponentsFileNames, !parsedArguments.useGlobalFrontier && !parsedArguments.useBlockAggregation, true}};
 
         // Align sequence to graph
         const ::cuSGA::cost_t* scores{};

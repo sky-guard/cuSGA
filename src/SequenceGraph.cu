@@ -6,7 +6,7 @@
 #include "KernelUtils.cuh"
 
 namespace cuSGA {
-    __host__ SequenceGraph::SequenceGraph(const ::std::string& pangenomeGraphFileName, const ::std::string& sequenceFileName, ::std::string const (& connectedComponentsFileNames)[NUM_BASES], bool ownsInstance, SequenceGraph* pinned_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) : SequenceGraph{PangenomeGraph{}, PackedDNASequence{}, {0}, {nullptr}, {nullptr}, {nullptr}, {nullptr}, {0}, DoubleBuffer<cost_t>{}, 0, nullptr, ownsInstance, pinned_instanceOptional} {
+    __host__ SequenceGraph::SequenceGraph(const ::std::string& pangenomeGraphFileName, const ::std::string& sequenceFileName, ::std::string const (& connectedComponentsFileNames)[NUM_BASES], const bool readConnectedComponents, bool ownsInstance, SequenceGraph* pinned_instanceOptional, KernelUtils::BumpPtrAllocator* allocatorOptional) : SequenceGraph{PangenomeGraph{}, PackedDNASequence{}, {0}, {nullptr}, {nullptr}, {nullptr}, {nullptr}, {0}, {0}, {nullptr}, {nullptr}, DoubleBuffer<cost_t>{}, 0, nullptr, ownsInstance, pinned_instanceOptional} {
         // Get allocator
         KernelUtils::BumpPtrAllocator* allocator{allocatorOptional};
         KernelUtils::BumpPtrAllocator allocatorInstance{};
@@ -48,18 +48,20 @@ namespace cuSGA {
         ::std::ifstream connectedComponentsFiles[NUM_BASES]{};
         connectedComponentSize_t totalNumConnectedComponents{0};
         connectedComponentSize_t numConnectedComponents[NUM_BASES]{};
+        if (readConnectedComponents) {
 #pragma unroll
-        for (DNABase_t baseIdx{0}; baseIdx < NUM_BASES; ++baseIdx) {
-            // Open connected components file
-            connectedComponentsFiles[baseIdx] = Utils::openFile(connectedComponentsFileNames[baseIdx]);
+            for (DNABase_t baseIdx{0}; baseIdx < NUM_BASES; ++baseIdx) {
+                // Open connected components file
+                connectedComponentsFiles[baseIdx] = Utils::openFile(connectedComponentsFileNames[baseIdx]);
 
-            // Read number of connected components from file
-            if (!(connectedComponentsFiles[baseIdx] >> numConnectedComponents[baseIdx])) {
-                throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", connectedComponentsFileNames[baseIdx])};
+                // Read number of connected components from file
+                if (!(connectedComponentsFiles[baseIdx] >> numConnectedComponents[baseIdx])) {
+                    throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", connectedComponentsFileNames[baseIdx])};
+                }
+
+                // Accumulate number of connected components
+                totalNumConnectedComponents += numConnectedComponents[baseIdx];
             }
-
-            // Accumulate number of connected components
-            totalNumConnectedComponents += numConnectedComponents[baseIdx];
         }
 
         // Grow allocator
@@ -79,71 +81,108 @@ namespace cuSGA {
         }
         this->pangenomeGraph = PangenomeGraph{pangenomeGraphFileName, false, &pinned_instance->pangenomeGraph, allocator};
         this->sequence = PackedDNASequence{sequenceFileName, false, &pinned_instance->sequence, allocator};
-        const auto connectedComponentsOffsetsBase{allocator->emplaceReserve<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsOffsets[0])>>>(totalNumConnectedComponents + NUM_BASES)};
-        const auto connectedComponentsMappingsBase{allocator->emplaceReserve<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsMappings[0])>>>(NUM_BASES * numNodes)};
-        const auto connectedComponentsReverseMappingsBase{allocator->emplaceReserve<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsReverseMappings[0])>>>(NUM_BASES * numNodes)};
-        const auto connectedComponentsLocalIndexMappingsBase{allocator->emplaceReserve<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsLocalIndexMappings[0])>>>(NUM_BASES * numNodes)};
-        connectedComponentSize_t connectedComponentsCounter{0};
+        if (readConnectedComponents) {
+            const auto connectedComponentsOffsetsBase{allocator->emplaceReserve<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsOffsets[0])>>>(totalNumConnectedComponents + NUM_BASES)};
+            const auto connectedComponentsMappingsBase{allocator->emplaceReserve<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsMappings[0])>>>(NUM_BASES * numNodes)};
+            const auto connectedComponentsReverseMappingsBase{allocator->emplaceReserve<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsReverseMappings[0])>>>(NUM_BASES * numNodes)};
+            const auto connectedComponentsLocalIndexMappingsBase{allocator->emplaceReserve<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsLocalIndexMappings[0])>>>(NUM_BASES * numNodes)};
+            const auto connectedComponentsRowOffsetsBase{allocator->emplaceReserve<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsRowOffsets[0])>>>(NUM_BASES * (numNodes + 1))};
+            const auto connectedComponentsColumnValuesBase{allocator->emplaceReserve<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsColumnValues[0])>>>(NUM_BASES * numEdges)};
+            connectedComponentSize_t connectedComponentsCounter{0};
+            edgeSize_t connectedComponentsEdgesCounter{0};
 #pragma unroll
-        for (DNABase_t baseIdx{0}; baseIdx < NUM_BASES; ++baseIdx) {
-            // Get connected components file
-            auto connectedComponentsFile{std::move(connectedComponentsFiles[baseIdx])};
+            for (DNABase_t baseIdx{0}; baseIdx < NUM_BASES; ++baseIdx) {
+                // Get connected components file
+                auto connectedComponentsFile{std::move(connectedComponentsFiles[baseIdx])};
 
-            // Set number of connected components
-            const auto numConnectedComponentsValue{numConnectedComponents[baseIdx]};
-            this->numConnectedComponents[baseIdx] = numConnectedComponentsValue;
+                // Set number of connected components
+                const auto numConnectedComponentsValue{numConnectedComponents[baseIdx]};
+                this->numConnectedComponents[baseIdx] = numConnectedComponentsValue;
 
-            // Read connected components offsets from file
-            const auto connectedComponentsOffsets{connectedComponentsOffsetsBase + connectedComponentsCounter};
-            for (connectedComponentSize_t connectedComponentIdx{0}; connectedComponentIdx <= numConnectedComponentsValue; ++connectedComponentIdx) {
-                if (!(connectedComponentsFile >> connectedComponentsOffsets[connectedComponentIdx])) {
-                    throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", connectedComponentsFileNames[baseIdx])};
-                }
-            }
-            this->connectedComponentsOffsets[baseIdx] = connectedComponentsOffsets;
-
-            // Read connected components mappings from file and build inverse local index map
-            const auto connectedComponentsMappings{connectedComponentsMappingsBase + baseIdx * numNodes};
-            const auto connectedComponentsLocalIndexMappings{connectedComponentsLocalIndexMappingsBase + baseIdx * numNodes};
-            for (connectedComponentSize_t connectedComponentIndex{0}; connectedComponentIndex < numConnectedComponentsValue; ++connectedComponentIndex) {
-                const auto connectedComponentStart{connectedComponentsOffsets[connectedComponentIndex]};
-                const auto connectedComponentEnd{connectedComponentsOffsets[connectedComponentIndex + 1]};
-                for (nodeSize_t nodeIdx{connectedComponentStart}; nodeIdx < connectedComponentEnd; ++nodeIdx) {
-                    nodeSize_t globalNodeIdx{0};
-                    if (!(connectedComponentsFile >> globalNodeIdx)) {
+                // Read connected components offsets from file
+                const auto connectedComponentsOffsets{connectedComponentsOffsetsBase + connectedComponentsCounter};
+                for (connectedComponentSize_t connectedComponentIdx{0}; connectedComponentIdx <= numConnectedComponentsValue; ++connectedComponentIdx) {
+                    if (!(connectedComponentsFile >> connectedComponentsOffsets[connectedComponentIdx])) {
                         throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", connectedComponentsFileNames[baseIdx])};
                     }
-                    connectedComponentsMappings[nodeIdx] = globalNodeIdx;
-                    connectedComponentsLocalIndexMappings[globalNodeIdx] = nodeIdx - connectedComponentStart;
                 }
-            }
-            this->connectedComponentsMappings[baseIdx] = connectedComponentsMappings;
-            this->connectedComponentsLocalIndexMappings[baseIdx] = connectedComponentsLocalIndexMappings;
+                this->connectedComponentsOffsets[baseIdx] = connectedComponentsOffsets;
 
-            // Read connected components reverse mappings from file
-            const auto connectedComponentsReverseMappings{connectedComponentsReverseMappingsBase + baseIdx * numNodes};
-            for (nodeSize_t nodeIdx{0}; nodeIdx < numNodes; ++nodeIdx) {
-                connectedComponentSize_t connectedComponentReverseMapping{0};
-                if (!(connectedComponentsFile >> connectedComponentReverseMapping)) {
+                // Read connected components mappings from file and build inverse local index map
+                const auto connectedComponentsMappings{connectedComponentsMappingsBase + baseIdx * numNodes};
+                const auto connectedComponentsLocalIndexMappings{connectedComponentsLocalIndexMappingsBase + baseIdx * numNodes};
+                for (connectedComponentSize_t connectedComponentIndex{0}; connectedComponentIndex < numConnectedComponentsValue; ++connectedComponentIndex) {
+                    const auto connectedComponentStart{connectedComponentsOffsets[connectedComponentIndex]};
+                    const auto connectedComponentEnd{connectedComponentsOffsets[connectedComponentIndex + 1]};
+                    for (nodeSize_t nodeIdx{connectedComponentStart}; nodeIdx < connectedComponentEnd; ++nodeIdx) {
+                        nodeSize_t globalNodeIdx{0};
+                        if (!(connectedComponentsFile >> globalNodeIdx)) {
+                            throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", connectedComponentsFileNames[baseIdx])};
+                        }
+                        connectedComponentsMappings[nodeIdx] = globalNodeIdx;
+                        connectedComponentsLocalIndexMappings[globalNodeIdx] = nodeIdx - connectedComponentStart;
+                    }
+                }
+                this->connectedComponentsMappings[baseIdx] = connectedComponentsMappings;
+                this->connectedComponentsLocalIndexMappings[baseIdx] = connectedComponentsLocalIndexMappings;
+
+                // Read connected components reverse mappings from file
+                const auto connectedComponentsReverseMappings{connectedComponentsReverseMappingsBase + baseIdx * numNodes};
+                for (nodeSize_t nodeIdx{0}; nodeIdx < numNodes; ++nodeIdx) {
+                    connectedComponentSize_t connectedComponentReverseMapping{0};
+                    if (!(connectedComponentsFile >> connectedComponentReverseMapping)) {
+                        throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", connectedComponentsFileNames[baseIdx])};
+                    }
+                    connectedComponentsReverseMappings[nodeIdx] = connectedComponentReverseMapping;
+                }
+                this->connectedComponentsReverseMappings[baseIdx] = connectedComponentsReverseMappings;
+
+                // Find max connected component size for this base
+                connectedComponentSize_t maxConnectedComponentsSize{0};
+                for (connectedComponentSize_t connectedComponentIdx{0}; connectedComponentIdx < numConnectedComponentsValue; ++connectedComponentIdx) {
+                    const auto currentConnectedComponentSize{connectedComponentsOffsets[connectedComponentIdx + 1] - connectedComponentsOffsets[connectedComponentIdx]};
+                    maxConnectedComponentsSize = ::std::max(maxConnectedComponentsSize, currentConnectedComponentSize);
+                }
+                this->maxConnectedComponentsSizes[baseIdx] = maxConnectedComponentsSize;
+
+                // Read connected component number of edges
+                edgeSize_t connectedComponentNumEdges{0};
+                if (!(connectedComponentsFile >> connectedComponentNumEdges)) {
                     throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", connectedComponentsFileNames[baseIdx])};
                 }
-                connectedComponentsReverseMappings[nodeIdx] = connectedComponentReverseMapping;
+                this->connectedComponentsNumEdges[baseIdx] = connectedComponentNumEdges;
+
+                // Read connected component row offsets from file
+                const auto connectedComponentsRowOffsets{connectedComponentsRowOffsetsBase + baseIdx * (numNodes + 1)};
+                for (nodeSize_t rowOffsetIdx{0}; rowOffsetIdx <= numNodes; ++rowOffsetIdx) {
+                    edgeSize_t connectedComponentRowOffset{0};
+                    if (!(connectedComponentsFile >> connectedComponentRowOffset)) {
+                        throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", connectedComponentsFileNames[baseIdx])};
+                    }
+                    connectedComponentsRowOffsets[rowOffsetIdx] = connectedComponentRowOffset;
+                }
+                this->connectedComponentsRowOffsets[baseIdx] = connectedComponentsRowOffsets;
+
+                // Read connected component column values from file
+                const auto connectedComponentsColumnValues{connectedComponentsColumnValuesBase + connectedComponentsEdgesCounter};
+                for (edgeSize_t edgeIdx{0}; edgeIdx < connectedComponentNumEdges; ++edgeIdx) {
+                    nodeSize_t connectedComponentColumnValue{0};
+                    if (!(connectedComponentsFile >> connectedComponentColumnValue)) {
+                        throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", connectedComponentsFileNames[baseIdx])};
+                    }
+                    connectedComponentsColumnValues[edgeIdx] = connectedComponentColumnValue;
+                }
+                this->connectedComponentsColumnValues[baseIdx] = connectedComponentsColumnValues;
+
+                // Increase number of connected components counter
+                connectedComponentsCounter += (numConnectedComponents[baseIdx] + 1);
+
+                // Increase number of connected components edges counter
+                connectedComponentsEdgesCounter += numEdges;
+
+                // Close connected components file
+                connectedComponentsFile.close();
             }
-            this->connectedComponentsReverseMappings[baseIdx] = connectedComponentsReverseMappings;
-
-            // Find max connected component size for this base
-            connectedComponentSize_t maxConnectedComponentsSize{0};
-            for (connectedComponentSize_t connectedComponentIdx{0}; connectedComponentIdx < numConnectedComponentsValue; ++connectedComponentIdx) {
-                const auto currentConnectedComponentSize{connectedComponentsOffsets[connectedComponentIdx + 1] - connectedComponentsOffsets[connectedComponentIdx]};
-                maxConnectedComponentsSize = ::std::max(maxConnectedComponentsSize, currentConnectedComponentSize);
-            }
-            this->maxConnectedComponentsSizes[baseIdx] = maxConnectedComponentsSize;
-
-            // Increase number of connected components counter
-            connectedComponentsCounter += (numConnectedComponents[baseIdx] + 1);
-
-            // Close connected components file
-            connectedComponentsFile.close();
         }
         this->costsDoubleBuffer = DoubleBuffer{numNodes, false, &pinned_instance->costsDoubleBuffer, allocator};
         this->numScores = numScores;
@@ -200,24 +239,32 @@ namespace cuSGA {
         const auto d_connectedComponentsMappingsBase{allocator->cudaEmplaceCopy<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsMappings[0])>>>(connectedComponentsMappings[0], ::cudaMemcpyHostToDevice, NUM_BASES * pangenomeGraph.getNumNodes(), false, cudaStreamDefault)};
         const auto d_connectedComponentsReverseMappingsBase{allocator->cudaEmplaceCopy<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsReverseMappings[0])>>>(connectedComponentsReverseMappings[0], ::cudaMemcpyHostToDevice, NUM_BASES * pangenomeGraph.getNumNodes(), false, cudaStreamDefault)};
         const auto d_connectedComponentsLocalIndexMappingsBase{allocator->cudaEmplaceCopy<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsLocalIndexMappings[0])>>>(connectedComponentsLocalIndexMappings[0], ::cudaMemcpyHostToDevice, NUM_BASES * pangenomeGraph.getNumNodes(), false, cudaStreamDefault)};
+        const auto d_connectedComponentsRowOffsetsBase{allocator->cudaEmplaceCopy<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsRowOffsets[0])>>>(connectedComponentsRowOffsets[0], ::cudaMemcpyHostToDevice, NUM_BASES * (pangenomeGraph.getNumNodes() + 1), false, cudaStreamDefault)};
+        const auto d_connectedComponentsColumnValuesBase{allocator->cudaEmplaceCopy<::std::remove_pointer_t<::std::remove_reference_t<decltype(connectedComponentsColumnValues[0])>>>(connectedComponentsColumnValues[0], ::cudaMemcpyHostToDevice, NUM_BASES * pangenomeGraph.getNumEdges(), false, cudaStreamDefault)};
         nodeSize_t* d_connectedComponentsOffsets[NUM_BASES]{nullptr};
         nodeSize_t* d_connectedComponentsMappings[NUM_BASES]{nullptr};
         connectedComponentSize_t* d_connectedComponentsReverseMappings[NUM_BASES]{nullptr};
         connectedComponentSize_t* d_connectedComponentsLocalIndexMappings[NUM_BASES]{nullptr};
+        edgeSize_t* d_connectedComponentsRowOffsets[NUM_BASES]{nullptr};
+        nodeSize_t* d_connectedComponentsColumnValues[NUM_BASES]{nullptr};
         connectedComponentSize_t connectedComponentsCounter{0};
+        edgeSize_t connectedComponentsEdgesCounter{0};
 #pragma unroll
         for (DNABase_t baseIdx{0}; baseIdx < NUM_BASES; ++baseIdx) {
             d_connectedComponentsOffsets[baseIdx] = d_connectedComponentsOffsetsBase + connectedComponentsCounter;
             d_connectedComponentsMappings[baseIdx] = d_connectedComponentsMappingsBase + baseIdx * pangenomeGraph.getNumNodes();
             d_connectedComponentsReverseMappings[baseIdx] = d_connectedComponentsReverseMappingsBase + baseIdx * pangenomeGraph.getNumNodes();
             d_connectedComponentsLocalIndexMappings[baseIdx] = d_connectedComponentsLocalIndexMappingsBase + baseIdx * pangenomeGraph.getNumNodes();
+            d_connectedComponentsRowOffsets[baseIdx] = d_connectedComponentsRowOffsetsBase + baseIdx * (pangenomeGraph.getNumNodes() + 1);
+            d_connectedComponentsColumnValues[baseIdx] = d_connectedComponentsColumnValuesBase + connectedComponentsEdgesCounter;
             connectedComponentsCounter += (numConnectedComponents[baseIdx] + 1);
+            connectedComponentsEdgesCounter += connectedComponentsNumEdges[baseIdx];
         }
         const auto d_costsDoubleBuffer{costsDoubleBuffer.copyToDevice(&d_instance->costsDoubleBuffer, allocator)};
         const auto d_scores{allocator->cudaEmplaceCopy<::std::remove_pointer_t<decltype(scores)>>(scores, ::cudaMemcpyHostToDevice, numScores, false, cudaStreamDefault)};
 
         // Create temporary host instance holding the device pointers
-        const SequenceGraph d_sequenceGraph{d_pangenomeGraph, sequence, numConnectedComponents, d_connectedComponentsOffsets, d_connectedComponentsMappings, d_connectedComponentsReverseMappings, d_connectedComponentsLocalIndexMappings, maxConnectedComponentsSizes, d_costsDoubleBuffer, numScores, d_scores, ownsInstance, pinned_instance, d_instance};
+        const SequenceGraph d_sequenceGraph{d_pangenomeGraph, sequence, numConnectedComponents, d_connectedComponentsOffsets, d_connectedComponentsMappings, d_connectedComponentsReverseMappings, d_connectedComponentsLocalIndexMappings, maxConnectedComponentsSizes, connectedComponentsNumEdges, d_connectedComponentsRowOffsets, d_connectedComponentsColumnValues, d_costsDoubleBuffer, numScores, d_scores, ownsInstance, pinned_instance, d_instance};
 
         // Emplace instance
         if (ownsInstance) {

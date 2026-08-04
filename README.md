@@ -189,6 +189,9 @@ cuSGA expects the following Input Files:
   CONNECTED_COMPONENT_OFFSETS
   NODE_MAPPINGS
   CONNECTED_COMPONENT_REVERSE_MAPPINGS
+  NUMBER_OF_EDGES
+  ROW_OFFSETS
+  COLUMN_VALUES
   ```
 
   ***NOTE**: cuSGA will automatically look for these files under the following naming convention:*
