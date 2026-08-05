@@ -947,6 +947,9 @@ namespace cuSGA {
         // Get selector
         bool selector{true};
 
+        // Synchronize warp
+        ::__syncwarp();
+
         // Perform propagations
         while (true) {
             // Get frontier size
