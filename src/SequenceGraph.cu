@@ -111,6 +111,7 @@ namespace cuSGA {
                 // Read connected components mappings from file and build inverse local index map
                 const auto connectedComponentsMappings{connectedComponentsMappingsBase + baseIdx * numNodes};
                 const auto connectedComponentsLocalIndexMappings{connectedComponentsLocalIndexMappingsBase + baseIdx * numNodes};
+                const auto connectedComponentsReverseMappings{connectedComponentsReverseMappingsBase + baseIdx * numNodes};
                 for (connectedComponentSize_t connectedComponentIndex{0}; connectedComponentIndex < numConnectedComponentsValue; ++connectedComponentIndex) {
                     const auto connectedComponentStart{connectedComponentsOffsets[connectedComponentIndex]};
                     const auto connectedComponentEnd{connectedComponentsOffsets[connectedComponentIndex + 1]};
@@ -121,20 +122,11 @@ namespace cuSGA {
                         }
                         connectedComponentsMappings[nodeIdx] = globalNodeIdx;
                         connectedComponentsLocalIndexMappings[globalNodeIdx] = nodeIdx - connectedComponentStart;
+                        connectedComponentsReverseMappings[globalNodeIdx] = connectedComponentIndex;
                     }
                 }
                 this->connectedComponentsMappings[baseIdx] = connectedComponentsMappings;
                 this->connectedComponentsLocalIndexMappings[baseIdx] = connectedComponentsLocalIndexMappings;
-
-                // Read connected components reverse mappings from file
-                const auto connectedComponentsReverseMappings{connectedComponentsReverseMappingsBase + baseIdx * numNodes};
-                for (nodeSize_t nodeIdx{0}; nodeIdx < numNodes; ++nodeIdx) {
-                    connectedComponentSize_t connectedComponentReverseMapping{0};
-                    if (!(connectedComponentsFile >> connectedComponentReverseMapping)) {
-                        throw ::std::runtime_error{::std::format("An error occurred while reading values from file: {}", connectedComponentsFileNames[baseIdx])};
-                    }
-                    connectedComponentsReverseMappings[nodeIdx] = connectedComponentReverseMapping;
-                }
                 this->connectedComponentsReverseMappings[baseIdx] = connectedComponentsReverseMappings;
 
                 // Find max connected component size for this base
